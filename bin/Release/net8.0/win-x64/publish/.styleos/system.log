@@ -1,0 +1,5 @@
+[2026-05-24 16:57:35] [SYSTEM] Starting Boot Sequence
+[2026-05-24 16:57:53] [AUTH] Failed login attempt for user '123'
+[2026-05-24 16:58:19] [AUTH] User 'root' logged in.
+[2026-05-24 16:58:25] [SHELL] User 'root' executed: help
+[2026-05-24 16:58:34] [SHELL] User 'root' executed: neofetch
