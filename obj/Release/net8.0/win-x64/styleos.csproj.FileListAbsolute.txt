@@ -198,3 +198,7 @@ D:\Files\vsstudio\styleos\obj\Release\net8.0\win-x64\refint\StyleOS.dll
 D:\Files\vsstudio\styleos\obj\Release\net8.0\win-x64\StyleOS.pdb
 D:\Files\vsstudio\styleos\obj\Release\net8.0\win-x64\styleos.genruntimeconfig.cache
 D:\Files\vsstudio\styleos\obj\Release\net8.0\win-x64\ref\StyleOS.dll
+D:\Files\vsstudio\styleos\bin\Release\net8.0\win-x64\Microsoft.Win32.SystemEvents.dll
+D:\Files\vsstudio\styleos\bin\Release\net8.0\win-x64\System.Drawing.Common.dll
+D:\Files\vsstudio\styleos\bin\Release\net8.0\win-x64\System.Private.Windows.Core.dll
+D:\Files\vsstudio\styleos\bin\Release\net8.0\win-x64\System.Private.Windows.GdiPlus.dll

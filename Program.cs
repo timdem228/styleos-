@@ -1,11 +1,10 @@
-﻿// Requires: dotnet add package System.Management
-// Если пакет не установлен, закомментируйте блок в SysInfo.GetWmiHardware() или установите его через NuGet.
-
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
+using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Management;
 using System.Net.Http;
@@ -14,7 +13,6 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -22,12 +20,15 @@ namespace StyleOS
 {
     public class Program
     {
+        public const string Version = "1.1.2-pre-release2";
         public static string CurrentDirectory { get; set; } = Directory.GetCurrentDirectory();
         public static User CurrentUser { get; set; } = null;
         public static bool IsRunning { get; set; } = true;
         public static bool RequestReboot { get; set; } = false;
 
         public static readonly string SysDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".styleos");
+        public static readonly string ImageDir = Path.Combine(SysDir, "img");
+        public static readonly string LogoFile = Path.Combine(ImageDir, "styleos.png");
         public static readonly string UsersFile = Path.Combine(SysDir, "users.json");
         public static readonly string ConfigFile = Path.Combine(SysDir, "config.json");
         public static readonly string HistoryFile = Path.Combine(SysDir, "history.log");
@@ -37,11 +38,36 @@ namespace StyleOS
         public static SystemConfig Config { get; set; } = new SystemConfig();
         public static DateTime BootTime { get; set; }
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
+        private const int STD_OUTPUT_HANDLE = -11;
+        private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+
+        private static void EnableAnsiProcessing()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var handle = GetStdHandle(STD_OUTPUT_HANDLE);
+                if (GetConsoleMode(handle, out uint mode))
+                {
+                    SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+                }
+            }
+        }
+
         public static async Task Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
             Console.InputEncoding = Encoding.UTF8;
 
+            EnableAnsiProcessing();
             EnsureSystemDirs();
             ConfigManager.LoadConfig();
 
@@ -50,7 +76,7 @@ namespace StyleOS
                 RequestReboot = false;
                 BootTime = DateTime.Now;
                 
-                SystemLogger.Log("SYSTEM", "Starting Boot Sequence");
+                SystemLogger.Log("SYSTEM", $"Starting Boot Sequence v{Version}");
                 await BootSequence();
 
                 AuthSystem.Init();
@@ -82,6 +108,7 @@ namespace StyleOS
         private static void EnsureSystemDirs()
         {
             if (!Directory.Exists(SysDir)) Directory.CreateDirectory(SysDir);
+            if (!Directory.Exists(ImageDir)) Directory.CreateDirectory(ImageDir);
             if (!File.Exists(LogFile)) File.Create(LogFile).Close();
         }
 
@@ -90,46 +117,129 @@ namespace StyleOS
             Console.Clear();
             Console.CursorVisible = false;
 
-            string[] bootMessages = {
-                "[  OK  ] Loading kernel modules...",
-                "[  OK  ] Mounting root filesystem...",
-                "[  OK  ] Checking hardware integrity...",
-                "[  OK  ] Initializing ACPI subsystem...",
-                "[  OK  ] Starting system logging...",
-                "[  OK  ] Bringing up network interface eth0...",
-                "[  OK  ] Starting package manager daemon...",
-                "[  OK  ] Reaching target System Initialization."
+            DrawCenteredLogo();
+
+            await UpdateSystem.CheckOnBootAsync();
+
+            Thread.Sleep(2500);
+            Console.Clear();
+            Console.CursorVisible = true;
+        }
+
+        private static void DrawCenteredLogo()
+        {
+            bool drawnImg = false;
+            string targetFile = null;
+
+            string[] possibleFiles = { 
+                Path.Combine(ImageDir, "StyleOS.jpg"), 
+                Path.Combine(ImageDir, "styleos.jpg"), 
+                LogoFile 
             };
 
-            foreach (var msg in bootMessages)
+            foreach (var file in possibleFiles)
             {
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.Write(msg.Substring(0, 8));
-                Console.ForegroundColor = ConsoleColor.White;
-                Console.WriteLine(msg.Substring(8));
-                Thread.Sleep(new Random().Next(100, 300));
+                if (File.Exists(file))
+                {
+                    targetFile = file;
+                    break;
+                }
             }
 
-            Thread.Sleep(500);
-            Console.Clear();
+            if (targetFile != null)
+            {
+                try
+                {
+#pragma warning disable CA1416
+                    using (Bitmap bmp = new Bitmap(targetFile))
+                    {
+                        int consoleWidth = Math.Max(10, Console.WindowWidth - 4);
+                        int consoleHeight = Math.Max(10, Console.WindowHeight - 6);
+                        
+                        int maxImgWidth = consoleWidth;
+                        int maxImgHeight = consoleHeight * 2;
 
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            string logo = @"
-  ____  _         _        ____   _____ 
- / ___|| |_ _   _| | ___  / __ \ / ___| 
- \___ \| __| | | | |/ _ \| |  | |\___ \ 
-  ___) | |_| |_| | |  __/| |__| | ___) |
- |____/ \__|\__, |_|\___| \____/ |____/ 
-            |___/                       
-";
-            Console.WriteLine(logo);
+                        float ratioX = (float)maxImgWidth / bmp.Width;
+                        float ratioY = (float)maxImgHeight / bmp.Height;
+                        float ratio = Math.Min(ratioX, ratioY);
+                        
+                        int newWidth = Math.Max(1, (int)(bmp.Width * ratio));
+                        int newHeight = Math.Max(1, (int)(bmp.Height * ratio));
+
+                        using (Bitmap resized = new Bitmap(bmp, new Size(newWidth, newHeight)))
+                        {
+                            int startLeft = Math.Max(0, (Console.WindowWidth - newWidth) / 2);
+                            int startTop = Math.Max(0, (Console.WindowHeight - (newHeight / 2)) / 2);
+
+                            for (int y = 0; y < newHeight; y += 2)
+                            {
+                                Console.SetCursorPosition(startLeft, startTop + (y / 2));
+                                for (int x = 0; x < newWidth; x++)
+                                {
+                                    Color top = resized.GetPixel(x, y);
+                                    Color bottom = (y + 1 < newHeight) ? resized.GetPixel(x, y + 1) : Color.Black;
+                                    
+                                    bool tTrans = top.A < 128 || (top.R < 15 && top.G < 15 && top.B < 15);
+                                    bool bTrans = bottom.A < 128 || (bottom.R < 15 && bottom.G < 15 && bottom.B < 15);
+
+                                    if (tTrans && bTrans)
+                                    {
+                                        Console.Write("\x1b[0m ");
+                                    }
+                                    else if (tTrans && !bTrans)
+                                    {
+                                        Console.Write($"\x1b[38;2;{bottom.R};{bottom.G};{bottom.B}m▄\x1b[0m");
+                                    }
+                                    else if (!tTrans && bTrans)
+                                    {
+                                        Console.Write($"\x1b[38;2;{top.R};{top.G};{top.B}m▀\x1b[0m");
+                                    }
+                                    else
+                                    {
+                                        Console.Write($"\x1b[38;2;{top.R};{top.G};{top.B};48;2;{bottom.R};{bottom.G};{bottom.B}m▀\x1b[0m");
+                                    }
+                                }
+                            }
+                        }
+                    }
+#pragma warning restore CA1416
+                    drawnImg = true;
+                }
+                catch 
+                { 
+                }
+            }
+
+            if (!drawnImg)
+            {
+                string[] asciiLogo = {
+                    @"  ____  _         _        ____   _____ ",
+                    @" / ___|| |_ _   _| | ___  / __ \ / ___| ",
+                    @" \___ \| __| | | | |/ _ \| |  | |\___ \ ",
+                    @"  ___) | |_| |_| | |  __/| |__| | ___) |",
+                    @" |____/ \__|\__, |_|\___| \____/ |____/ ",
+                    @"            |___/                       ",
+                    $"",
+                    $"v{Version}"
+                };
+
+                int top = Math.Max(0, (Console.WindowHeight - asciiLogo.Length) / 2);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                
+                for (int i = 0; i < asciiLogo.Length; i++)
+                {
+                    int left = Math.Max(0, (Console.WindowWidth - asciiLogo[i].Length) / 2);
+                    Console.SetCursorPosition(left, top + i);
+                    Console.WriteLine(asciiLogo[i]);
+                }
+                Console.ResetColor();
+            }
+
+            string status = "Loading Style OS core...";
+            Console.SetCursorPosition(Math.Max(0, (Console.WindowWidth - status.Length) / 2), Console.WindowHeight - 2);
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine($" Version 1.0.0-LTS  |  Core: C#/.NET 8  |  Arch: {RuntimeInformation.ProcessArchitecture}");
-            Console.WriteLine($" Boot Time: {BootTime:HH:mm:ss.fff}");
-            Console.WriteLine(new string('-', 60));
+            Console.Write(status);
             Console.ResetColor();
-            Thread.Sleep(1000);
-            Console.CursorVisible = true;
         }
     }
 
@@ -194,15 +304,31 @@ namespace StyleOS
                 if (key.Key == ConsoleKey.Backspace && pass.Length > 0)
                 {
                     pass = pass.Substring(0, pass.Length - 1);
-                    Console.Write("\b \b");
                 }
                 else if (!char.IsControl(key.KeyChar))
                 {
                     pass += key.KeyChar;
-                    Console.Write("*");
                 }
             }
             return pass;
+        }
+
+        public static bool RequirePassword()
+        {
+            if (Program.CurrentUser == null) return false;
+            Console.Write($"[sudo] password for {Program.CurrentUser.Username}: ");
+            string input = ReadPassword();
+            Console.WriteLine();
+            
+            if (HashPassword(input) == Program.CurrentUser.PasswordHash)
+            {
+                return true;
+            }
+            
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("Sorry, try again.");
+            Console.ResetColor();
+            return false;
         }
 
         public static string HashPassword(string password)
@@ -301,6 +427,152 @@ namespace StyleOS
         }
     }
 
+    public static class UpdateSystem
+    {
+        public static string LatestVersionAvailable { get; private set; } = null;
+
+        public static async Task CheckOnBootAsync()
+        {
+            try
+            {
+                using HttpClient client = new HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent", "StyleOS-Client");
+                string json = await client.GetStringAsync("https://api.github.com/repos/timdem228/styleos-/releases/latest");
+                using JsonDocument doc = JsonDocument.Parse(json);
+                string tag = doc.RootElement.GetProperty("tag_name").GetString();
+                
+                if (IsNewerVersion(Program.Version, tag))
+                {
+                    LatestVersionAvailable = tag;
+                }
+            }
+            catch { }
+        }
+
+        public static void PrintBootNotification()
+        {
+            if (!string.IsNullOrEmpty(LatestVersionAvailable))
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"\n[INFO] Available new release: Style OS {LatestVersionAvailable}!");
+                Console.WriteLine($"       Use 'pacman update' to download and install.\n");
+                Console.ResetColor();
+            }
+        }
+
+        public static async Task RunUpdateProcess()
+        {
+            Console.WriteLine("Checking for updates...");
+            try
+            {
+                using HttpClient client = new HttpClient();
+                client.DefaultRequestHeaders.Add("User-Agent", "StyleOS-Client");
+                string json = await client.GetStringAsync("https://api.github.com/repos/timdem228/styleos-/releases/latest");
+                using JsonDocument doc = JsonDocument.Parse(json);
+                string tag = doc.RootElement.GetProperty("tag_name").GetString();
+
+                if (!IsNewerVersion(Program.Version, tag))
+                {
+                    Console.WriteLine($"You are already on the latest version ({Program.Version}).");
+                    return;
+                }
+
+                Console.WriteLine($"New version {tag} found!");
+                Console.Write("Do you want to download and install this update? [y/N]: ");
+                string ans = Console.ReadLine()?.ToLower();
+                if (ans != "y" && ans != "yes")
+                {
+                    Console.WriteLine("Update aborted.");
+                    return;
+                }
+
+                if (!AuthSystem.RequirePassword())
+                {
+                    Console.WriteLine("Authentication failed. Update aborted.");
+                    return;
+                }
+
+                var assets = doc.RootElement.GetProperty("assets");
+                if (assets.GetArrayLength() == 0)
+                {
+                    Console.WriteLine("Error: No release artifacts found in the repository.");
+                    return;
+                }
+
+                string downloadUrl = assets[0].GetProperty("browser_download_url").GetString();
+                Console.WriteLine($"Downloading update archive...");
+
+                string tempZipPath = Path.Combine(Path.GetTempPath(), "styleos_update.zip");
+                string extractPath = Path.Combine(Path.GetTempPath(), "styleos_update_extracted");
+
+                if (File.Exists(tempZipPath)) File.Delete(tempZipPath);
+                if (Directory.Exists(extractPath)) Directory.Delete(extractPath, true);
+
+                byte[] zipData = await client.GetByteArrayAsync(downloadUrl);
+                File.WriteAllBytes(tempZipPath, zipData);
+                Console.WriteLine("Download complete. Extracting files...");
+
+                ZipFile.ExtractToDirectory(tempZipPath, extractPath);
+                
+                Console.WriteLine("Preparing system for restart and replacement...");
+                
+                string currentExe = Process.GetCurrentProcess().MainModule.FileName;
+                string currentDir = Path.GetDirectoryName(currentExe);
+                string updaterBat = Path.Combine(Path.GetTempPath(), "styleos_updater.bat");
+
+                string batCode = $@"@echo off
+title Style OS Updater
+echo Applying update, please wait...
+ping 127.0.0.1 -n 3 > nul
+echo Overwriting files...
+xcopy /Y /E ""{extractPath}\*"" ""{currentDir}""
+echo Cleaning up...
+del ""{tempZipPath}""
+rmdir /S /Q ""{extractPath}""
+echo Restarting Style OS...
+start """" ""{currentExe}""
+del ""%~f0""
+";
+                File.WriteAllText(updaterBat, batCode);
+
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = updaterBat,
+                    UseShellExecute = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                });
+
+                Console.WriteLine("Update initialized. System will now shut down to apply changes...");
+                Thread.Sleep(1000);
+                Environment.Exit(0);
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Update failed: {ex.Message}");
+                Console.ResetColor();
+            }
+        }
+
+        private static bool IsNewerVersion(string current, string latest)
+        {
+            try
+            {
+                string cleanLatest = latest.Split('-')[0].Trim('v', 'V', ' ');
+                string cleanCurrent = current.Split('-')[0].Trim('v', 'V', ' ');
+
+                if (Version.TryParse(cleanLatest, out Version vLatest) && 
+                    Version.TryParse(cleanCurrent, out Version vCurrent))
+                {
+                    return vLatest > vCurrent;
+                }
+            }
+            catch { }
+            
+            return false;
+        }
+    }
+
     public static class Shell
     {
         private static List<string> History = new List<string>();
@@ -310,6 +582,8 @@ namespace StyleOS
             LoadHistory();
             Console.WriteLine($"Welcome to Style OS, {Program.CurrentUser.Username}. Type 'help' for available commands.");
             
+            UpdateSystem.PrintBootNotification();
+
             while (Program.CurrentUser != null && Program.IsRunning && !Program.RequestReboot)
             {
                 DrawPrompt();
@@ -490,7 +764,6 @@ namespace StyleOS
 
             switch (cmd)
             {
-                // === FILESYSTEM ===
                 case "ls": case "dir": FileSystemCommands.Ls(args); break;
                 case "cd": FileSystemCommands.Cd(args); break;
                 case "pwd": Console.WriteLine(Program.CurrentDirectory); break;
@@ -505,19 +778,22 @@ namespace StyleOS
                 case "echo": Console.WriteLine(string.Join(" ", args)); break;
                 case "clear": case "cls": Console.Clear(); break;
 
-                // === SYSTEM ===
                 case "neofetch": case "sysinfo": SysInfoCommands.Neofetch(); break;
-                case "uname": Console.WriteLine($"StyleOS Kernel 1.0.0 {RuntimeInformation.OSArchitecture}"); break;
+                case "uname": Console.WriteLine($"StyleOS Kernel {Program.Version} {RuntimeInformation.OSArchitecture}"); break;
                 case "hostname": Console.WriteLine(Environment.MachineName); break;
                 case "time": Console.WriteLine(DateTime.Now.ToString("HH:mm:ss")); break;
                 case "date": Console.WriteLine(DateTime.Now.ToString("yyyy-MM-dd")); break;
                 case "reboot": 
-                    Console.WriteLine("Powering off..."); 
-                    Program.RequestReboot = true; 
+                    if (AuthSystem.RequirePassword()) {
+                        Console.WriteLine("Powering off..."); 
+                        Program.RequestReboot = true; 
+                    }
                     break;
                 case "shutdown": 
-                    Console.WriteLine("Powering off..."); 
-                    Program.IsRunning = false; 
+                    if (AuthSystem.RequirePassword()) {
+                        Console.WriteLine("Powering off..."); 
+                        Program.IsRunning = false; 
+                    }
                     break;
                 case "exit": Program.CurrentUser = null; break;
                 case "authors": Utils.Authors(); break;
@@ -525,25 +801,21 @@ namespace StyleOS
                 case "ps": SysInfoCommands.Ps(); break;
                 case "help": Utils.Help(); break;
 
-                // === NETWORK ===
                 case "ping": await NetworkCommands.Ping(args); break;
                 case "curl": await NetworkCommands.Curl(args); break;
                 case "wget": case "tc": await NetworkCommands.Download(args); break;
                 case "ipconfig": NetworkCommands.IpConfig(); break;
                 case "netstat": NetworkCommands.Netstat(); break;
 
-                // === DISKS ===
                 case "df": DiskCommands.Df(); break;
                 case "mount": DiskCommands.Mount(); break;
                 case "drives": DiskCommands.Drives(); break;
 
-                // === AUTH ===
                 case "passwd": AuthCommands.Passwd(); break;
                 case "useradd": AuthCommands.UserAdd(args); break;
                 case "userdel": AuthCommands.UserDel(args); break;
                 case "whoami": Console.WriteLine(Program.CurrentUser.Username); break;
 
-                // === MISC ===
                 case "tree": FileSystemCommands.Tree(args); break;
                 case "find": FileSystemCommands.Find(args); break;
                 case "grep": FileSystemCommands.Grep(args); break;
@@ -551,8 +823,8 @@ namespace StyleOS
                 case "color": case "theme": Utils.Theme(args); break;
                 case "history": Utils.ShowHistory(); break;
 
-                // === PACKAGE MANAGER ===
                 case "apt": case "pkg": PackageManager.HandleCommand(args); break;
+                case "pacman": await PackageManager.HandlePacman(args); break;
 
                 default:
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -922,12 +1194,12 @@ namespace StyleOS
             var hw = GetHardwareInfo();
 
             string[] ascii = {
-                @"       .---.       ",
-                @"      /     \      ",
-                @"     | () () |     ",
-                @"      \  ^  /      ",
-                @"       |||||       ",
-                @"       |||||       "
+                @"    _______    ",
+                @"   /  ___  \   ",
+                @"  |  (__ \_|   ",
+                @"   \___  \     ",
+                @"  |\___)  |    ",
+                @"   \_____/     "
             };
 
             Console.WriteLine();
@@ -944,7 +1216,7 @@ namespace StyleOS
                 {
                     case 0: Console.ForegroundColor = ConsoleColor.Green; Console.WriteLine($"{user}@{host}"); break;
                     case 1: Console.WriteLine(new string('-', $"{user}@{host}".Length)); break;
-                    case 2: Console.WriteLine($"OS: Style OS 1.0.0-LTS ({os})"); break;
+                    case 2: Console.WriteLine($"OS: Style OS {Program.Version}-LTS ({os})"); break;
                     case 3: Console.WriteLine($"Kernel: C# .NET 8 ({net})"); break;
                     case 4: Console.WriteLine($"Uptime: {uptime}"); break;
                     case 5: Console.WriteLine($"CPU: {hw.Cpu}"); break;
@@ -976,7 +1248,6 @@ namespace StyleOS
                 try
                 {
 #pragma warning disable CA1416
-                    // Использование ManagementObjectSearcher. Требует System.Management
                     using (var searcher = new ManagementObjectSearcher("select Name from Win32_Processor"))
                     {
                         foreach (var item in searcher.Get()) cpu = item["Name"].ToString();
@@ -997,7 +1268,6 @@ namespace StyleOS
                 }
                 catch
                 {
-                    // Fallback to Wmic if System.Management DLL is missing at runtime
                     try
                     {
                         cpu = RunCmd("wmic cpu get name").Split('\n')[1].Trim();
@@ -1267,6 +1537,21 @@ namespace StyleOS
                 Console.WriteLine("Done.");
             }
         }
+
+        public static async Task HandlePacman(List<string> args)
+        {
+            if (args.Count == 0) { Console.WriteLine("pacman: missing operation"); return; }
+            string action = args[0].ToLower();
+
+            if (action == "update")
+            {
+                await UpdateSystem.RunUpdateProcess();
+            }
+            else
+            {
+                Console.WriteLine($"pacman: invalid option '{action}'");
+            }
+        }
     }
 
     public static class Utils
@@ -1284,7 +1569,7 @@ namespace StyleOS
             Console.WriteLine("  Network: ping, curl, wget, tc, ipconfig, netstat");
             Console.WriteLine("  Disks:   df, mount, drives");
             Console.WriteLine("  Auth:    passwd, useradd, userdel, whoami");
-            Console.WriteLine("  Misc:    calc, theme, pkg/apt");
+            Console.WriteLine("  Misc:    calc, theme, pkg/apt, pacman update");
         }
 
         public static void Calc(List<string> args)
