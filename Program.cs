@@ -20,11 +20,12 @@ namespace StyleOS
 {
     public class Program
     {
-        public const string Version = "1.1.2-pre-release2";
+        public const string Version = "1.1.2";
         public static string CurrentDirectory { get; set; } = Directory.GetCurrentDirectory();
         public static User CurrentUser { get; set; } = null;
         public static bool IsRunning { get; set; } = true;
         public static bool RequestReboot { get; set; } = false;
+        public static bool DebugMode { get; set; } = false;
 
         public static readonly string SysDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".styleos");
         public static readonly string ImageDir = Path.Combine(SysDir, "img");
@@ -47,10 +48,17 @@ namespace StyleOS
         [DllImport("kernel32.dll")]
         private static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int cmdShow);
+
+        [DllImport("kernel32.dll", ExactSpelling = true)]
+        private static extern IntPtr GetConsoleWindow();
+
         private const int STD_OUTPUT_HANDLE = -11;
         private const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
+        private const int SW_MAXIMIZE = 3;
 
-        private static void EnableAnsiProcessing()
+        private static void EnableAnsiAndFullscreen()
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
@@ -59,50 +67,135 @@ namespace StyleOS
                 {
                     SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
                 }
+                IntPtr consoleWindow = GetConsoleWindow();
+                if (consoleWindow != IntPtr.Zero)
+                {
+                    ShowWindow(consoleWindow, SW_MAXIMIZE);
+                }
             }
         }
 
         public static async Task Main(string[] args)
         {
-            Console.OutputEncoding = Encoding.UTF8;
-            Console.InputEncoding = Encoding.UTF8;
-
-            EnableAnsiProcessing();
-            EnsureSystemDirs();
-            ConfigManager.LoadConfig();
-
-            while (IsRunning)
+            try
             {
-                RequestReboot = false;
-                BootTime = DateTime.Now;
-                
-                SystemLogger.Log("SYSTEM", $"Starting Boot Sequence v{Version}");
-                await BootSequence();
+                Console.OutputEncoding = Encoding.UTF8;
+                Console.InputEncoding = Encoding.UTF8;
 
-                AuthSystem.Init();
-                while (CurrentUser == null && IsRunning && !RequestReboot)
+                EnableAnsiAndFullscreen();
+                EnsureSystemDirs();
+                ConfigManager.LoadConfig();
+
+                CheckDebugKey();
+
+                while (IsRunning)
                 {
-                    AuthSystem.LoginPrompt();
+                    RequestReboot = false;
+                    BootTime = DateTime.Now;
+                    
+                    SystemLogger.Log("SYSTEM", $"Starting Boot Sequence v{Version}");
+                    await BootSequence();
+
+                    AuthSystem.Init();
+                    while (CurrentUser == null && IsRunning && !RequestReboot)
+                    {
+                        AuthSystem.LoginPrompt();
+                    }
+
+                    if (CurrentUser != null)
+                    {
+                        SystemLogger.Log("AUTH", $"User '{CurrentUser.Username}' logged in.");
+                        await Shell.StartSession();
+                    }
+
+                    if (RequestReboot)
+                    {
+                        CurrentUser = null;
+                        Console.Clear();
+                        Console.ForegroundColor = ConsoleColor.Cyan;
+                        Console.WriteLine("Restarting System...");
+                        Thread.Sleep(1500);
+                        Console.ResetColor();
+                    }
                 }
 
-                if (CurrentUser != null)
-                {
-                    SystemLogger.Log("AUTH", $"User '{CurrentUser.Username}' logged in.");
-                    await Shell.StartSession();
-                }
+                Console.Clear();
+            }
+            catch (Exception ex)
+            {
+                CrashHandler.HandleCrash(ex);
+            }
+        }
 
-                if (RequestReboot)
+        private static void CheckDebugKey()
+        {
+            Console.Clear();
+            Console.WriteLine("Starting Style OS...");
+            Console.WriteLine("Press F6 for Debug Mode Menu...");
+            
+            DateTime start = DateTime.Now;
+            bool f6Pressed = false;
+            
+            while ((DateTime.Now - start).TotalSeconds < 1.5)
+            {
+                if (Console.KeyAvailable && Console.ReadKey(true).Key == ConsoleKey.F6)
                 {
-                    CurrentUser = null;
-                    Console.Clear();
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.WriteLine("Restarting System...");
-                    Thread.Sleep(1500);
-                    Console.ResetColor();
+                    f6Pressed = true;
+                    break;
                 }
             }
 
-            Console.Clear();
+            if (f6Pressed)
+            {
+                int selected = 0;
+                string[] options = { "Boot Style OS", "Debug Mode: OFF" };
+
+                while (true)
+                {
+                    Console.Clear();
+                    Console.WriteLine("=== SYSTEM RECOVERY & DEBUG MENU ===\n");
+                    for (int i = 0; i < options.Length; i++)
+                    {
+                        if (i == selected)
+                        {
+                            Console.BackgroundColor = ConsoleColor.White;
+                            Console.ForegroundColor = ConsoleColor.Black;
+                            Console.WriteLine($"> {options[i]}");
+                            Console.ResetColor();
+                        }
+                        else
+                        {
+                            Console.WriteLine($"  {options[i]}");
+                        }
+                    }
+
+                    var key = Console.ReadKey(true).Key;
+                    if (key == ConsoleKey.UpArrow) selected = Math.Max(0, selected - 1);
+                    if (key == ConsoleKey.DownArrow) selected = Math.Min(options.Length - 1, selected + 1);
+                    if (key == ConsoleKey.Enter)
+                    {
+                        if (selected == 0) break;
+                        if (selected == 1)
+                        {
+                            AuthSystem.Init();
+                            Console.Write("\nRoot Password required: ");
+                            string pwd = AuthSystem.ReadPassword();
+                            if (AuthSystem.VerifyRootForDebug(pwd))
+                            {
+                                DebugMode = !DebugMode;
+                                options[1] = $"Debug Mode: {(DebugMode ? "ON" : "OFF")}";
+                            }
+                            else
+                            {
+                                Console.ForegroundColor = ConsoleColor.Red;
+                                Console.WriteLine("\nAccess Denied.");
+                                Console.ResetColor();
+                                Thread.Sleep(1000);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         private static void EnsureSystemDirs()
@@ -110,6 +203,10 @@ namespace StyleOS
             if (!Directory.Exists(SysDir)) Directory.CreateDirectory(SysDir);
             if (!Directory.Exists(ImageDir)) Directory.CreateDirectory(ImageDir);
             if (!File.Exists(LogFile)) File.Create(LogFile).Close();
+            if (!File.Exists(UsersFile)) 
+            {
+                AuthSystem.Init();
+            }
         }
 
         private static async Task BootSequence()
@@ -117,11 +214,48 @@ namespace StyleOS
             Console.Clear();
             Console.CursorVisible = false;
 
-            DrawCenteredLogo();
+            if (DebugMode)
+            {
+                SystemLogger.Log("BOOT", "Debug mode initialized. Bypassing graphical splash.");
+            }
+            else
+            {
+                DrawCenteredLogo();
+            }
 
+            bool isBooting = true;
+            Task spinner = Task.Run(() =>
+            {
+                char[] chars = { '/', '-', '\\', '|' };
+                int i = 0;
+                while (isBooting)
+                {
+                    if (!DebugMode)
+                    {
+                        Console.SetCursorPosition(0, Console.WindowHeight - 1);
+                        Console.ForegroundColor = ConsoleColor.Cyan;
+                        Console.Write($"booting up {chars[i]}");
+                        Console.ResetColor();
+                    }
+                    i = (i + 1) % chars.Length;
+                    Thread.Sleep(100);
+                }
+            });
+
+            SystemLogger.Log("BOOT", "Loading kernel modules...");
+            await Task.Delay(DebugMode ? 500 : 100);
+            SystemLogger.Log("BOOT", "Mounting virtual file systems...");
+            await Task.Delay(DebugMode ? 500 : 100);
+            SystemLogger.Log("BOOT", "Initializing network stack...");
+            
             await UpdateSystem.CheckOnBootAsync();
 
-            Thread.Sleep(2500);
+            SystemLogger.Log("BOOT", "Checking for system updates... Done.");
+            await Task.Delay(DebugMode ? 500 : 1500);
+            
+            isBooting = false;
+            await spinner;
+
             Console.Clear();
             Console.CursorVisible = true;
         }
@@ -234,12 +368,60 @@ namespace StyleOS
                 }
                 Console.ResetColor();
             }
+        }
+    }
 
-            string status = "Loading Style OS core...";
-            Console.SetCursorPosition(Math.Max(0, (Console.WindowWidth - status.Length) / 2), Console.WindowHeight - 2);
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.Write(status);
+    public static class CrashHandler
+    {
+        public static void HandleCrash(Exception ex)
+        {
+            Console.Clear();
+            Console.BackgroundColor = ConsoleColor.Red;
+            Console.ForegroundColor = ConsoleColor.White;
+            Console.WriteLine("".PadRight(Console.WindowWidth));
+            Console.WriteLine(" FATAL SYSTEM ERROR ".PadRight(Console.WindowWidth));
+            Console.WriteLine("".PadRight(Console.WindowWidth));
             Console.ResetColor();
+            
+            Console.WriteLine("\nПрограмма вылетела по неизвестной ошибке.");
+            Console.WriteLine("Вы можете написать о баге разработчикам!");
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"\nDetails: {ex.Message}");
+            Console.ResetColor();
+
+            Console.WriteLine("\n[ OK ] Закрыть ошибку (завершить работу)");
+            Console.WriteLine("[ TEXT ] Написать разработчикам (откроется mail.google.com)");
+
+            while (true)
+            {
+                Console.Write("\nSelect action (ok/text): ");
+                string act = Console.ReadLine()?.ToLower().Trim();
+                
+                if (act == "ok")
+                {
+                    Environment.Exit(1);
+                }
+                else if (act == "text")
+                {
+                    try
+                    {
+                        string logs = "";
+                        if (File.Exists(Program.LogFile))
+                        {
+                            var allLogs = File.ReadAllLines(Program.LogFile);
+                            logs = string.Join("\n", allLogs.Skip(Math.Max(0, allLogs.Length - 30)));
+                        }
+                        
+                        string subject = Uri.EscapeDataString("StyleOS Crash Report");
+                        string body = Uri.EscapeDataString($"Система крашнулась!\n\nОшибка:\n{ex.Message}\n\nStack Trace:\n{ex.StackTrace}\n\nПоследние логи:\n{logs}");
+                        string url = $"https://mail.google.com/mail/?view=cm&fs=1&to=admin@timd.site&su={subject}&body={body}";
+                        
+                        Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+                    }
+                    catch { }
+                    Environment.Exit(1);
+                }
+            }
         }
     }
 
@@ -256,9 +438,23 @@ namespace StyleOS
             }
             else
             {
-                string json = File.ReadAllText(Program.UsersFile);
-                Users = JsonSerializer.Deserialize<List<User>>(json) ?? new List<User>();
+                try
+                {
+                    string json = File.ReadAllText(Program.UsersFile);
+                    Users = JsonSerializer.Deserialize<List<User>>(json) ?? new List<User>();
+                }
+                catch
+                {
+                    Users.Add(new User { Username = "root", PasswordHash = HashPassword("root"), IsRoot = true });
+                }
             }
+        }
+
+        public static bool VerifyRootForDebug(string pwd)
+        {
+            var root = Users.FirstOrDefault(u => u.IsRoot);
+            if (root != null && root.PasswordHash == HashPassword(pwd)) return true;
+            return false;
         }
 
         public static void SaveUsers()
@@ -420,8 +616,15 @@ namespace StyleOS
         {
             try
             {
-                string logLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{module}] {message}{Environment.NewLine}";
-                File.AppendAllText(Program.LogFile, logLine);
+                string logLine = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{module}] {message}";
+                File.AppendAllText(Program.LogFile, logLine + Environment.NewLine);
+                
+                if (Program.DebugMode)
+                {
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.WriteLine(logLine);
+                    Console.ResetColor();
+                }
             }
             catch { }
         }
@@ -462,6 +665,7 @@ namespace StyleOS
 
         public static async Task RunUpdateProcess()
         {
+            SystemLogger.Log("PACMAN", "Checking for system updates...");
             Console.WriteLine("Checking for updates...");
             try
             {
@@ -473,7 +677,9 @@ namespace StyleOS
 
                 if (!IsNewerVersion(Program.Version, tag))
                 {
-                    Console.WriteLine($"You are already on the latest version ({Program.Version}).");
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"\nSystem is up to date! You are on the latest version (Style OS {Program.Version}).");
+                    Console.ResetColor();
                     return;
                 }
 
@@ -554,17 +760,29 @@ del ""%~f0""
             }
         }
 
-        private static bool IsNewerVersion(string current, string latest)
+        public static bool IsNewerVersion(string current, string latest)
         {
             try
             {
-                string cleanLatest = latest.Split('-')[0].Trim('v', 'V', ' ');
-                string cleanCurrent = current.Split('-')[0].Trim('v', 'V', ' ');
+                string cleanLatest = latest.Trim('v', 'V', ' ');
+                string cleanCurrent = current.Trim('v', 'V', ' ');
 
-                if (Version.TryParse(cleanLatest, out Version vLatest) && 
-                    Version.TryParse(cleanCurrent, out Version vCurrent))
+                string[] latestParts = cleanLatest.Split('-');
+                string[] currentParts = cleanCurrent.Split('-');
+
+                if (Version.TryParse(latestParts[0], out Version vLatest) && 
+                    Version.TryParse(currentParts[0], out Version vCurrent))
                 {
-                    return vLatest > vCurrent;
+                    if (vLatest > vCurrent) return true;
+                    if (vLatest < vCurrent) return false;
+
+                    if (latestParts.Length == 1 && currentParts.Length > 1) return true;
+                    if (latestParts.Length > 1 && currentParts.Length == 1) return false;
+
+                    if (latestParts.Length > 1 && currentParts.Length > 1)
+                    {
+                        return string.Compare(cleanLatest, cleanCurrent, StringComparison.OrdinalIgnoreCase) > 0;
+                    }
                 }
             }
             catch { }
@@ -825,6 +1043,7 @@ del ""%~f0""
 
                 case "apt": case "pkg": PackageManager.HandleCommand(args); break;
                 case "pacman": await PackageManager.HandlePacman(args); break;
+                case "bugreport": BugReportEditor.Run(); break;
 
                 default:
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -1113,68 +1332,154 @@ del ""%~f0""
                     continue;
                 }
 
-                switch (key.Key)
-                {
-                    case ConsoleKey.UpArrow:
-                        if (cy > 0) cy--;
-                        else if (offset > 0) offset--;
+                ProcessKey(key, lines, ref cx, ref cy, ref offset, availableLines);
+            }
+            Console.Clear();
+        }
+
+        public static void ProcessKey(ConsoleKeyInfo key, List<string> lines, ref int cx, ref int cy, ref int offset, int availableLines)
+        {
+            switch (key.Key)
+            {
+                case ConsoleKey.UpArrow:
+                    if (cy > 0) cy--;
+                    else if (offset > 0) offset--;
+                    cx = Math.Min(cx, lines[offset + cy].Length);
+                    break;
+                case ConsoleKey.DownArrow:
+                    if (offset + cy < lines.Count - 1)
+                    {
+                        if (cy < availableLines - 1) cy++;
+                        else offset++;
                         cx = Math.Min(cx, lines[offset + cy].Length);
-                        break;
-                    case ConsoleKey.DownArrow:
-                        if (offset + cy < lines.Count - 1)
-                        {
-                            if (cy < availableLines - 1) cy++;
-                            else offset++;
-                            cx = Math.Min(cx, lines[offset + cy].Length);
-                        }
-                        break;
-                    case ConsoleKey.LeftArrow:
-                        if (cx > 0) cx--;
-                        else if (offset + cy > 0)
-                        {
-                            if (cy > 0) cy--; else offset--;
-                            cx = lines[offset + cy].Length;
-                        }
-                        break;
-                    case ConsoleKey.RightArrow:
-                        if (cx < lines[offset + cy].Length) cx++;
-                        else if (offset + cy < lines.Count - 1)
-                        {
-                            if (cy < availableLines - 1) cy++; else offset++;
-                            cx = 0;
-                        }
-                        break;
-                    case ConsoleKey.Enter:
-                        string currentLine = lines[offset + cy];
-                        string rem = currentLine.Substring(cx);
-                        lines[offset + cy] = currentLine.Substring(0, cx);
-                        lines.Insert(offset + cy + 1, rem);
-                        cx = 0;
+                    }
+                    break;
+                case ConsoleKey.LeftArrow:
+                    if (cx > 0) cx--;
+                    else if (offset + cy > 0)
+                    {
+                        if (cy > 0) cy--; else offset--;
+                        cx = lines[offset + cy].Length;
+                    }
+                    break;
+                case ConsoleKey.RightArrow:
+                    if (cx < lines[offset + cy].Length) cx++;
+                    else if (offset + cy < lines.Count - 1)
+                    {
                         if (cy < availableLines - 1) cy++; else offset++;
-                        break;
-                    case ConsoleKey.Backspace:
-                        if (cx > 0)
-                        {
-                            lines[offset + cy] = lines[offset + cy].Remove(cx - 1, 1);
-                            cx--;
-                        }
-                        else if (offset + cy > 0)
-                        {
-                            int prevLen = lines[offset + cy - 1].Length;
-                            lines[offset + cy - 1] += lines[offset + cy];
-                            lines.RemoveAt(offset + cy);
-                            if (cy > 0) cy--; else offset--;
-                            cx = prevLen;
-                        }
-                        break;
-                    default:
-                        if (!char.IsControl(key.KeyChar))
-                        {
-                            lines[offset + cy] = lines[offset + cy].Insert(cx, key.KeyChar.ToString());
-                            cx++;
-                        }
-                        break;
+                        cx = 0;
+                    }
+                    break;
+                case ConsoleKey.Enter:
+                    string currentLine = lines[offset + cy];
+                    string rem = currentLine.Substring(cx);
+                    lines[offset + cy] = currentLine.Substring(0, cx);
+                    lines.Insert(offset + cy + 1, rem);
+                    cx = 0;
+                    if (cy < availableLines - 1) cy++; else offset++;
+                    break;
+                case ConsoleKey.Backspace:
+                    if (cx > 0)
+                    {
+                        lines[offset + cy] = lines[offset + cy].Remove(cx - 1, 1);
+                        cx--;
+                    }
+                    else if (offset + cy > 0)
+                    {
+                        int prevLen = lines[offset + cy - 1].Length;
+                        lines[offset + cy - 1] += lines[offset + cy];
+                        lines.RemoveAt(offset + cy);
+                        if (cy > 0) cy--; else offset--;
+                        cx = prevLen;
+                    }
+                    break;
+                default:
+                    if (!char.IsControl(key.KeyChar))
+                    {
+                        lines[offset + cy] = lines[offset + cy].Insert(cx, key.KeyChar.ToString());
+                        cx++;
+                    }
+                    break;
+            }
+        }
+    }
+
+    public static class BugReportEditor
+    {
+        public static void Run()
+        {
+            List<string> lines = new List<string> { "" };
+            int cx = 0, cy = 0;
+            int offset = 0;
+
+            while (true)
+            {
+                Console.Clear();
+                Console.BackgroundColor = ConsoleColor.DarkRed;
+                Console.ForegroundColor = ConsoleColor.White;
+                string header = $"  StyleOS Bug Reporter".PadRight(Console.WindowWidth / 2) + $"Dest: admin@timd.site";
+                Console.WriteLine(header.PadRight(Console.WindowWidth));
+                Console.ResetColor();
+
+                int availableLines = Console.WindowHeight - 4;
+                for (int i = 0; i < availableLines; i++)
+                {
+                    int lineIdx = offset + i;
+                    if (lineIdx < lines.Count)
+                    {
+                        Console.WriteLine(lines[lineIdx]);
+                    }
+                    else Console.WriteLine();
                 }
+
+                Console.BackgroundColor = ConsoleColor.DarkRed;
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.SetCursorPosition(0, Console.WindowHeight - 2);
+                string helpStr = "^S Send    ^X Cancel    Arrows Move";
+                Console.Write(helpStr.PadRight(Console.WindowWidth));
+                Console.ResetColor();
+
+                Console.SetCursorPosition(cx, cy + 1);
+
+                var key = Console.ReadKey(true);
+                
+                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.X) break;
+                
+                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.S)
+                {
+                    Console.Clear();
+                    Console.WriteLine("Формирование отчета об ошибке...");
+                    
+                    try
+                    {
+                        string reportText = string.Join("\n", lines);
+                        string logs = "";
+                        if (File.Exists(Program.LogFile))
+                        {
+                            var allLogs = File.ReadAllLines(Program.LogFile);
+                            logs = string.Join("\n", allLogs.Skip(Math.Max(0, allLogs.Length - 40)));
+                        }
+
+                        string subject = Uri.EscapeDataString("StyleOS Bug Report");
+                        string body = Uri.EscapeDataString($"User Description:\n{reportText}\n\nSystem Logs:\n{logs}");
+                        string url = $"https://mail.google.com/mail/?view=cm&fs=1&to=admin@timd.site&su={subject}&body={body}";
+
+                        Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("Браузер с подготовленным письмом был открыт. Нажмите 'Отправить' в почте.");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"Ошибка при открытии браузера: {ex.Message}");
+                    }
+                    
+                    Console.ResetColor();
+                    Thread.Sleep(2000);
+                    break;
+                }
+
+                NanoEditor.ProcessKey(key, lines, ref cx, ref cy, ref offset, availableLines);
             }
             Console.Clear();
         }
@@ -1216,7 +1521,7 @@ del ""%~f0""
                 {
                     case 0: Console.ForegroundColor = ConsoleColor.Green; Console.WriteLine($"{user}@{host}"); break;
                     case 1: Console.WriteLine(new string('-', $"{user}@{host}".Length)); break;
-                    case 2: Console.WriteLine($"OS: Style OS {Program.Version}-LTS ({os})"); break;
+                    case 2: Console.WriteLine($"OS: Style OS {Program.Version} ({os})"); break;
                     case 3: Console.WriteLine($"Kernel: C# .NET 8 ({net})"); break;
                     case 4: Console.WriteLine($"Uptime: {uptime}"); break;
                     case 5: Console.WriteLine($"CPU: {hw.Cpu}"); break;
@@ -1569,7 +1874,7 @@ del ""%~f0""
             Console.WriteLine("  Network: ping, curl, wget, tc, ipconfig, netstat");
             Console.WriteLine("  Disks:   df, mount, drives");
             Console.WriteLine("  Auth:    passwd, useradd, userdel, whoami");
-            Console.WriteLine("  Misc:    calc, theme, pkg/apt, pacman update");
+            Console.WriteLine("  Misc:    calc, theme, pkg/apt, pacman update, bugreport");
         }
 
         public static void Calc(List<string> args)
