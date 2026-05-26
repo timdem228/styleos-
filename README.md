@@ -1,8 +1,8 @@
 # Styleos-
 * StyleOS is an advanced console shell environment for Windows developed in C# that bridges the gap between retro terminal aesthetics and modern system functionality. The project focuses on providing a high-detail UI/UX within a command-line interface, including support for graphics and system automation.
 # LOGIN AND PASS!!!!
-* root
-* root
+* LOGIN:root
+* PASS: JUST TAP ENTER!!!!!!
 
 ## Key Features
 * **Graphic Engine:** Implements a unique image rendering system using half-block characters to achieve higher vertical resolution in the console.
