@@ -1,5 +1,5 @@
 # Styleos-
-#LOGIN AND PASS!!!!
+# LOGIN AND PASS!!!!
 root
 root
 StyleOS is an advanced console shell environment for Windows developed in C# that bridges the gap between retro terminal aesthetics and modern system functionality. The project focuses on providing a high-detail UI/UX within a command-line interface, including support for graphics and system automation.
