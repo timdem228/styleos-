@@ -1,7 +1,5 @@
 <p align="center">
   <img src="https://github.com/user-attachments/assets/cc340c4d-2057-41fe-b63c-220832767396" alt="StyleOS Logo" width="600">
-  <img width="7533" height="1833" alt="StyleOS Logo" src="https://github.com/user-attachments/assets/cc340c4d-2057-41fe-b63c-220832767396" />
-
 </p>
 Hey there! This is StyleOS, a project I've been working on for a while now. It's basically a custom shell environment for Windows made with C#. I wanted to make something that looks like those old-school terminals but actually has some modern stuff under the hood like image rendering and a package manager.
 
