@@ -38,4 +38,4 @@ If you want to see what the system is doing while it boots up, mash the **F6** k
 ## **Installation**
 Just grab the zip from the releases page, unpack it anywere, and run `StyleOS.exe`. It **DONT** needs .NET to run, but most Windows PCs have that anyway.
 
-Hope you like it! If you have ideas for new features, feel free to reach out.
+Hope you like it! If you have ideas for new features, text is to me! admin@timd.site
