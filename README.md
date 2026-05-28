@@ -32,10 +32,10 @@ The system works mostly like a Linux terminal. If your lost, just type `help` to
 *   `calc` - do some quick math
 *   `theme` - change the colors if you don't like the green/blue look
 
-### **The Secret Menu**
+### **The Debug Menu**
 If you want to see what the system is doing while it boots up, mash the **F6** key right after you start the .exe. It will open a Debug Menu where you can enable "Verbose" mode (you'll need the root password for this though).
 
 ## **Installation**
-Just grab the zip from the releases page, unpack it anywere, and run `StyleOS.exe`. It needs .NET to run, but most Windows PCs have that anyway.
+Just grab the zip from the releases page, unpack it anywere, and run `StyleOS.exe`. It **DONT** needs .NET to run, but most Windows PCs have that anyway.
 
 Hope you like it! If you have ideas for new features, feel free to reach out.
