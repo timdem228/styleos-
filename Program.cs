@@ -20,7 +20,7 @@ namespace StyleOS
 {
     public class Program
     {
-        public const string Version = "1.1.2";
+        public const string Version = "1.1.3";
         public static string CurrentDirectory { get; set; } = Directory.GetCurrentDirectory();
         public static User CurrentUser { get; set; } = null;
         public static bool IsRunning { get; set; } = true;
@@ -1276,6 +1276,8 @@ del ""%~f0""
 
     public static class NanoEditor
     {
+        private static string Clipboard = "";
+
         public static void Run(List<string> args)
         {
             if (args.Count == 0) { Console.WriteLine("nano: missing filename"); return; }
@@ -1286,58 +1288,140 @@ del ""%~f0""
             if (lines.Count == 0) lines.Add("");
 
             int cx = 0, cy = 0;
-            int offset = 0;
+            int offset = 0, coffset = 0;
+            string message = "";
 
             while (true)
             {
-                Console.Clear();
+                Console.CursorVisible = false;
+                Console.SetCursorPosition(0, 0);
                 Console.BackgroundColor = ConsoleColor.Gray;
                 Console.ForegroundColor = ConsoleColor.Black;
-                string header = $"  GNU nano 7.2".PadRight(Console.WindowWidth / 2) + $"File: {Path.GetFileName(filePath)}";
-                Console.WriteLine(header.PadRight(Console.WindowWidth));
+                string header = $"  GNU nano 9.0".PadRight(Console.WindowWidth / 2) + $"File: {Path.GetFileName(filePath)}";
+                Console.Write(header.PadRight(Console.WindowWidth));
                 Console.ResetColor();
 
                 int availableLines = Console.WindowHeight - 4;
                 for (int i = 0; i < availableLines; i++)
                 {
+                    Console.SetCursorPosition(0, i + 1);
                     int lineIdx = offset + i;
                     if (lineIdx < lines.Count)
                     {
-                        Console.WriteLine(lines[lineIdx]);
+                        string l = lines[lineIdx];
+                        if (coffset < l.Length)
+                        {
+                            string disp = l.Substring(coffset);
+                            if (disp.Length > Console.WindowWidth) disp = disp.Substring(0, Console.WindowWidth);
+                            Console.Write(disp.PadRight(Console.WindowWidth));
+                        }
+                        else
+                        {
+                            Console.Write("".PadRight(Console.WindowWidth));
+                        }
                     }
-                    else Console.WriteLine();
+                    else
+                    {
+                        Console.Write("".PadRight(Console.WindowWidth));
+                    }
                 }
 
+                Console.SetCursorPosition(0, Console.WindowHeight - 3);
                 Console.BackgroundColor = ConsoleColor.Gray;
                 Console.ForegroundColor = ConsoleColor.Black;
+                Console.Write(message.PadRight(Console.WindowWidth));
+                message = "";
+
                 Console.SetCursorPosition(0, Console.WindowHeight - 2);
-                string helpStr = "^S Save    ^X Exit    Arrows Move";
-                Console.Write(helpStr.PadRight(Console.WindowWidth));
+                string helpStr1 = "^S Save   ^X Exit   ^W Where Is   ^G Go To Line";
+                Console.Write(helpStr1.PadRight(Console.WindowWidth));
+                Console.SetCursorPosition(0, Console.WindowHeight - 1);
+                string helpStr2 = "^K Cut    ^U Paste  Arrows Move";
+                Console.Write(helpStr2.PadRight(Console.WindowWidth));
                 Console.ResetColor();
 
-                Console.SetCursorPosition(cx, cy + 1);
+                Console.SetCursorPosition(cx - coffset, cy + 1);
+                Console.CursorVisible = true;
 
                 var key = Console.ReadKey(true);
                 
-                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.X) break;
-                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.S)
+                if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
                 {
-                    File.WriteAllLines(filePath, lines);
-                    Console.SetCursorPosition(0, Console.WindowHeight - 1);
-                    Console.BackgroundColor = ConsoleColor.Green;
-                    Console.ForegroundColor = ConsoleColor.Black;
-                    Console.Write($"[ Wrote {lines.Count} lines ]".PadRight(Console.WindowWidth));
-                    Console.ResetColor();
-                    Thread.Sleep(1000);
-                    continue;
+                    if (key.Key == ConsoleKey.X) break;
+                    if (key.Key == ConsoleKey.S)
+                    {
+                        File.WriteAllLines(filePath, lines);
+                        message = $"[ Wrote {lines.Count} lines ]";
+                        continue;
+                    }
+                    if (key.Key == ConsoleKey.K)
+                    {
+                        Clipboard = lines[offset + cy];
+                        lines.RemoveAt(offset + cy);
+                        if (lines.Count == 0) lines.Add("");
+                        if (cy >= lines.Count - offset) cy = Math.Max(0, lines.Count - offset - 1);
+                        cx = 0;
+                        coffset = 0;
+                        continue;
+                    }
+                    if (key.Key == ConsoleKey.U)
+                    {
+                        lines.Insert(offset + cy, Clipboard);
+                        cy++;
+                        if (cy >= availableLines) { cy--; offset++; }
+                        continue;
+                    }
+                    if (key.Key == ConsoleKey.W)
+                    {
+                        Console.SetCursorPosition(0, Console.WindowHeight - 3);
+                        Console.BackgroundColor = ConsoleColor.Gray;
+                        Console.ForegroundColor = ConsoleColor.Black;
+                        Console.Write("Search: ".PadRight(Console.WindowWidth));
+                        Console.SetCursorPosition(8, Console.WindowHeight - 3);
+                        Console.CursorVisible = true;
+                        string term = Console.ReadLine();
+                        
+                        char check = term[0]; 
+                        
+                        for (int i = 0; i < lines.Count; i++)
+                        {
+                            if (lines[i].Contains(term))
+                            {
+                                offset = i;
+                                cy = 0;
+                                cx = 0;
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    if (key.Key == ConsoleKey.G)
+                    {
+                        Console.SetCursorPosition(0, Console.WindowHeight - 3);
+                        Console.BackgroundColor = ConsoleColor.Gray;
+                        Console.ForegroundColor = ConsoleColor.Black;
+                        Console.Write("Go to line: ".PadRight(Console.WindowWidth));
+                        Console.SetCursorPosition(12, Console.WindowHeight - 3);
+                        Console.CursorVisible = true;
+                        string lineStr = Console.ReadLine();
+                        
+                        int lNum = int.Parse(lineStr) - 1;
+                        if (lNum >= 0 && lNum < lines.Count)
+                        {
+                            offset = lNum;
+                            cy = 0;
+                            cx = 0;
+                        }
+                        continue;
+                    }
                 }
 
-                ProcessKey(key, lines, ref cx, ref cy, ref offset, availableLines);
+                ProcessKey(key, lines, ref cx, ref cy, ref offset, ref coffset, availableLines);
             }
             Console.Clear();
         }
 
-        public static void ProcessKey(ConsoleKeyInfo key, List<string> lines, ref int cx, ref int cy, ref int offset, int availableLines)
+        public static void ProcessKey(ConsoleKeyInfo key, List<string> lines, ref int cx, ref int cy, ref int offset, ref int coffset, int availableLines)
         {
             switch (key.Key)
             {
@@ -1345,6 +1429,7 @@ del ""%~f0""
                     if (cy > 0) cy--;
                     else if (offset > 0) offset--;
                     cx = Math.Min(cx, lines[offset + cy].Length);
+                    if (cx < coffset) coffset = cx;
                     break;
                 case ConsoleKey.DownArrow:
                     if (offset + cy < lines.Count - 1)
@@ -1352,22 +1437,34 @@ del ""%~f0""
                         if (cy < availableLines - 1) cy++;
                         else offset++;
                         cx = Math.Min(cx, lines[offset + cy].Length);
+                        if (cx < coffset) coffset = cx;
                     }
                     break;
                 case ConsoleKey.LeftArrow:
-                    if (cx > 0) cx--;
+                    if (cx > 0)
+                    {
+                        cx--;
+                        if (cx < coffset) coffset = cx;
+                    }
                     else if (offset + cy > 0)
                     {
                         if (cy > 0) cy--; else offset--;
                         cx = lines[offset + cy].Length;
+                        if (cx >= Console.WindowWidth) coffset = cx - Console.WindowWidth + 1;
+                        else coffset = 0;
                     }
                     break;
                 case ConsoleKey.RightArrow:
-                    if (cx < lines[offset + cy].Length) cx++;
+                    if (cx < lines[offset + cy].Length)
+                    {
+                        cx++;
+                        if (cx >= coffset + Console.WindowWidth) coffset = cx - Console.WindowWidth + 1;
+                    }
                     else if (offset + cy < lines.Count - 1)
                     {
                         if (cy < availableLines - 1) cy++; else offset++;
                         cx = 0;
+                        coffset = 0;
                     }
                     break;
                 case ConsoleKey.Enter:
@@ -1376,6 +1473,7 @@ del ""%~f0""
                     lines[offset + cy] = currentLine.Substring(0, cx);
                     lines.Insert(offset + cy + 1, rem);
                     cx = 0;
+                    coffset = 0;
                     if (cy < availableLines - 1) cy++; else offset++;
                     break;
                 case ConsoleKey.Backspace:
@@ -1383,6 +1481,7 @@ del ""%~f0""
                     {
                         lines[offset + cy] = lines[offset + cy].Remove(cx - 1, 1);
                         cx--;
+                        if (cx < coffset) coffset = cx;
                     }
                     else if (offset + cy > 0)
                     {
@@ -1391,6 +1490,8 @@ del ""%~f0""
                         lines.RemoveAt(offset + cy);
                         if (cy > 0) cy--; else offset--;
                         cx = prevLen;
+                        if (cx >= Console.WindowWidth) coffset = cx - Console.WindowWidth + 1;
+                        else coffset = 0;
                     }
                     break;
                 default:
@@ -1398,6 +1499,7 @@ del ""%~f0""
                     {
                         lines[offset + cy] = lines[offset + cy].Insert(cx, key.KeyChar.ToString());
                         cx++;
+                        if (cx >= coffset + Console.WindowWidth) coffset = cx - Console.WindowWidth + 1;
                     }
                     break;
             }
@@ -1410,42 +1512,58 @@ del ""%~f0""
         {
             List<string> lines = new List<string> { "" };
             int cx = 0, cy = 0;
-            int offset = 0;
+            int offset = 0, coffset = 0;
 
             while (true)
             {
-                Console.Clear();
+                Console.CursorVisible = false;
+                Console.SetCursorPosition(0, 0);
                 Console.BackgroundColor = ConsoleColor.DarkRed;
                 Console.ForegroundColor = ConsoleColor.White;
                 string header = $"  StyleOS Bug Reporter".PadRight(Console.WindowWidth / 2) + $"Dest: admin@timd.site";
-                Console.WriteLine(header.PadRight(Console.WindowWidth));
+                Console.Write(header.PadRight(Console.WindowWidth));
                 Console.ResetColor();
 
                 int availableLines = Console.WindowHeight - 4;
                 for (int i = 0; i < availableLines; i++)
                 {
+                    Console.SetCursorPosition(0, i + 1);
                     int lineIdx = offset + i;
                     if (lineIdx < lines.Count)
                     {
-                        Console.WriteLine(lines[lineIdx]);
+                        string l = lines[lineIdx];
+                        if (coffset < l.Length)
+                        {
+                            string disp = l.Substring(coffset);
+                            if (disp.Length > Console.WindowWidth) disp = disp.Substring(0, Console.WindowWidth);
+                            Console.Write(disp.PadRight(Console.WindowWidth));
+                        }
+                        else
+                        {
+                            Console.Write("".PadRight(Console.WindowWidth));
+                        }
                     }
-                    else Console.WriteLine();
+                    else
+                    {
+                        Console.Write("".PadRight(Console.WindowWidth));
+                    }
                 }
 
+                Console.SetCursorPosition(0, Console.WindowHeight - 2);
                 Console.BackgroundColor = ConsoleColor.DarkRed;
                 Console.ForegroundColor = ConsoleColor.White;
-                Console.SetCursorPosition(0, Console.WindowHeight - 2);
-                string helpStr = "^S Send    ^X Cancel    Arrows Move";
+                string helpStr = "^C Send    ^X Cancel    Arrows Move";
                 Console.Write(helpStr.PadRight(Console.WindowWidth));
                 Console.ResetColor();
 
-                Console.SetCursorPosition(cx, cy + 1);
+                Console.SetCursorPosition(cx - coffset, cy + 1);
+                Console.CursorVisible = true;
 
                 var key = Console.ReadKey(true);
                 
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.X) break;
                 
-                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.S)
+                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C)
                 {
                     Console.Clear();
                     Console.WriteLine("Формирование отчета об ошибке...");
@@ -1479,7 +1597,7 @@ del ""%~f0""
                     break;
                 }
 
-                NanoEditor.ProcessKey(key, lines, ref cx, ref cy, ref offset, availableLines);
+                NanoEditor.ProcessKey(key, lines, ref cx, ref cy, ref offset, ref coffset, availableLines);
             }
             Console.Clear();
         }
@@ -1522,7 +1640,7 @@ del ""%~f0""
                     case 0: Console.ForegroundColor = ConsoleColor.Green; Console.WriteLine($"{user}@{host}"); break;
                     case 1: Console.WriteLine(new string('-', $"{user}@{host}".Length)); break;
                     case 2: Console.WriteLine($"OS: Style OS {Program.Version} ({os})"); break;
-                    case 3: Console.WriteLine($"Kernel: C# .NET 8 ({net})"); break;
+                    case 3: Console.WriteLine($"Kernel: C# .NET 10 ({net})"); break;
                     case 4: Console.WriteLine($"Uptime: {uptime}"); break;
                     case 5: Console.WriteLine($"CPU: {hw.Cpu}"); break;
                     case 6: Console.WriteLine($"GPU: {hw.Gpu}"); break;
@@ -1807,7 +1925,7 @@ del ""%~f0""
     {
         public static void HandleCommand(List<string> args)
         {
-            if (args.Count < 2) { Console.WriteLine("Usage: pkg <install|remove> <package>"); return; }
+            if (args.Count < 2) { Console.WriteLine("Usage: pkg <install|remove|search> <package>"); return; }
             string action = args[0].ToLower();
             string pkg = args[1].ToLower();
 
@@ -1840,6 +1958,11 @@ del ""%~f0""
                 installed.Remove(pkg);
                 File.WriteAllText(Program.PkgFile, JsonSerializer.Serialize(installed));
                 Console.WriteLine("Done.");
+            }
+            else if (action == "search")
+            {
+                Console.WriteLine($"Searching for {args[1]}...");
+                string desc = args[2]; 
             }
         }
 
