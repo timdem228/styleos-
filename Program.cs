@@ -20,7 +20,7 @@ namespace StyleOS
 {
     public class Program
     {
-        public const string Version = "1.1.3";
+        public const string Version = "1.1.4";
         public static string CurrentDirectory { get; set; } = Directory.GetCurrentDirectory();
         public static User CurrentUser { get; set; } = null;
         public static bool IsRunning { get; set; } = true;
@@ -1935,21 +1935,59 @@ del ""%~f0""
             if (action == "install")
             {
                 if (installed.Contains(pkg)) { Console.WriteLine($"{pkg} is already the newest version."); return; }
+
+                Console.WriteLine($"Resolving {pkg}...");
+                string repoUrl = $"http://api.timd.site/sos/r/{pkg}.txt";
                 
-                Console.WriteLine($"Reading package lists... Done");
-                Console.WriteLine($"Building dependency tree... Done");
-                Console.WriteLine($"The following NEW packages will be installed:\n  {pkg}");
-                Thread.Sleep(500);
-                Console.WriteLine($"Get:1 http://repo.styleos.net/main {pkg} amd64 [1,204 kB]");
-                Thread.Sleep(1000);
-                Console.WriteLine($"Fetched 1,204 kB in 1s (1,204 kB/s)");
-                Console.WriteLine($"Selecting previously unselected package {pkg}.");
-                Console.WriteLine($"Preparing to unpack .../{pkg}.deb ...");
-                Console.WriteLine($"Unpacking {pkg} ...");
-                Console.WriteLine($"Setting up {pkg} ...");
-                
-                installed.Add(pkg);
-                File.WriteAllText(Program.PkgFile, JsonSerializer.Serialize(installed));
+                try
+                {
+                    using HttpClient client = new HttpClient();
+                    HttpResponseMessage metaResponse = client.GetAsync(repoUrl).GetAwaiter().GetResult();
+                    
+                    if (!metaResponse.IsSuccessStatusCode)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine($"[PKG] Error: Package '{pkg}' not found.");
+                        Console.ResetColor();
+                        return;
+                    }
+
+                    string downloadUrl = metaResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult().Trim();
+                    
+                    if (string.IsNullOrEmpty(downloadUrl) || (!downloadUrl.StartsWith("http://") && !downloadUrl.StartsWith("https://")))
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine("[PKG] Error: Invalid repository metadata.");
+                        Console.ResetColor();
+                        return;
+                    }
+
+                    Console.WriteLine($"Downloading {pkg} from repository...");
+                    
+                    byte[] fileBytes = client.GetByteArrayAsync(downloadUrl).GetAwaiter().GetResult();
+                    string fileName = Path.GetFileName(new Uri(downloadUrl).LocalPath);
+                    
+                    if (string.IsNullOrEmpty(fileName))
+                    {
+                        fileName = $"{pkg}.bin";
+                    }
+
+                    string destPath = Path.Combine(Program.CurrentDirectory, fileName);
+                    File.WriteAllBytes(destPath, fileBytes);
+                    
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine($"[PKG] Successfully installed {fileName}");
+                    Console.ResetColor();
+
+                    installed.Add(pkg);
+                    File.WriteAllText(Program.PkgFile, JsonSerializer.Serialize(installed));
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"[PKG] Error: {ex.Message}");
+                    Console.ResetColor();
+                }
             }
             else if (action == "remove")
             {
