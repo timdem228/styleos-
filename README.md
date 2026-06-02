@@ -4,8 +4,8 @@
 
 ---
 > [!WARNING]
-> This project now in stil in dev, and its stil open beta , a lot of functions is not added
-> bebbebeb
+> This project is still in development, it is still an open beta, many features have not been added yet  
+> It's also a console system, but I'll add the .iso soon.
 
 ---
 
