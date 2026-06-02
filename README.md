@@ -1,6 +1,14 @@
 <p align="center">
   <img src="https://github.com/user-attachments/assets/cc340c4d-2057-41fe-b63c-220832767396" alt="StyleOS Logo" width="600">
 </p>
+
+---
+> [!WARNING]
+> This project now in stil in dev, and its stil open beta , a lot of functions is not added
+> bebbebeb
+
+---
+
 Hey there! This is StyleOS, a project I've been working on for a while now. It's basically a custom shell environment for Windows made with C#. I wanted to make something that looks like those old-school terminals but actually has some modern stuff under the hood like image rendering and a package manager.
 
 I'm still fixing stuff here and there, so if you find a bug, please let me know or use the new bugreport tool I just added.
