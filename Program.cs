@@ -20,7 +20,7 @@ namespace StyleOS
 {
     public class Program
     {
-        public const string Version = "1.1.4";
+        public const string Version = "1.1.5";
         public static string CurrentDirectory { get; set; } = Directory.GetCurrentDirectory();
         public static User CurrentUser { get; set; } = null;
         public static bool IsRunning { get; set; } = true;
@@ -35,6 +35,7 @@ namespace StyleOS
         public static readonly string HistoryFile = Path.Combine(SysDir, "history.log");
         public static readonly string PkgFile = Path.Combine(SysDir, "packages.json");
         public static readonly string LogFile = Path.Combine(SysDir, "system.log");
+        public static readonly string KdeFlagFile = Path.Combine(SysDir, "kde.bin");
 
         public static SystemConfig Config { get; set; } = new SystemConfig();
         public static DateTime BootTime { get; set; }
@@ -1045,6 +1046,32 @@ del ""%~f0""
                 case "pacman": await PackageManager.HandlePacman(args); break;
                 case "bugreport": BugReportEditor.Run(); break;
 
+                case "kde":
+                    if (args.Count == 0)
+                    {
+                        Console.WriteLine("Usage: kde <install|connect|stop>");
+                    }
+                    else if (args[0].ToLower() == "install")
+                    {
+                        Console.WriteLine("Installing KDE Plasma Desktop Environment...");
+                        Thread.Sleep(1500);
+                        KdeEnvironment.IsInstalled = true;
+                        Console.WriteLine("KDE installed successfully. Type 'kde connect' to launch.");
+                    }
+                    else if (args[0].ToLower() == "connect")
+                    {
+                        await KdeEnvironment.Run();
+                    }
+                    else if (args[0].ToLower() == "stop")
+                    {
+                        Console.WriteLine("KDE is not currently running.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"kde: invalid option '{args[0]}'");
+                    }
+                    break;
+
                 default:
                     Console.ForegroundColor = ConsoleColor.Red;
                     Console.WriteLine($"bash: {cmd}: command not found");
@@ -1552,7 +1579,7 @@ del ""%~f0""
                 Console.SetCursorPosition(0, Console.WindowHeight - 2);
                 Console.BackgroundColor = ConsoleColor.DarkRed;
                 Console.ForegroundColor = ConsoleColor.White;
-                string helpStr = "^C Send    ^X Cancel    Arrows Move";
+                string helpStr = "^S Send    ^X Cancel    Arrows Move";
                 Console.Write(helpStr.PadRight(Console.WindowWidth));
                 Console.ResetColor();
 
@@ -1563,7 +1590,7 @@ del ""%~f0""
                 
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.X) break;
                 
-                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.C)
+                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.S)
                 {
                     Console.Clear();
                     Console.WriteLine("Формирование отчета об ошибке...");
@@ -2035,7 +2062,7 @@ del ""%~f0""
             Console.WriteLine("  Network: ping, curl, wget, tc, ipconfig, netstat");
             Console.WriteLine("  Disks:   df, mount, drives");
             Console.WriteLine("  Auth:    passwd, useradd, userdel, whoami");
-            Console.WriteLine("  Misc:    calc, theme, pkg/apt, pacman update, bugreport");
+            Console.WriteLine("  Misc:    calc, theme, pkg/apt, pacman update, bugreport, kde");
         }
 
         public static void Calc(List<string> args)
@@ -2083,6 +2110,362 @@ del ""%~f0""
                     Console.WriteLine($"  {i + 1}  {lines[i]}");
                 }
             }
+        }
+    }
+
+    public class KdeWindow
+    {
+        public string Title { get; set; }
+        public int X { get; set; }
+        public int Y { get; set; }
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public Dictionary<string, object> State { get; set; } = new Dictionary<string, object>();
+        public Action<KdeWindow, int, int> DrawContent { get; set; }
+        public Func<KdeWindow, ConsoleKeyInfo, Task> HandleInput { get; set; }
+    }
+
+    public static class KdeEnvironment
+    {
+        public static bool IsInstalled
+        {
+            get { return File.Exists(Program.KdeFlagFile); }
+            set { if (value) File.WriteAllText(Program.KdeFlagFile, "1"); else if (File.Exists(Program.KdeFlagFile)) File.Delete(Program.KdeFlagFile); }
+        }
+
+        public static async Task Run()
+        {
+            if (!IsInstalled)
+            {
+                Console.WriteLine("KDE is not installed. Type 'kde install' first.");
+                return;
+            }
+
+            bool running = true;
+            bool menuOpen = false;
+            int menuSelection = 0;
+
+            List<KdeWindow> windows = new List<KdeWindow>
+            {
+                CreateTerminalWindow()
+            };
+
+            Console.CursorVisible = false;
+
+            while (running)
+            {
+                DrawDesktop(windows, menuOpen, menuSelection);
+
+                var key = Console.ReadKey(true);
+
+                if (key.Key == ConsoleKey.F1)
+                {
+                    menuOpen = !menuOpen;
+                    menuSelection = 0;
+                    continue;
+                }
+
+                if (menuOpen)
+                {
+                    if (key.Key == ConsoleKey.UpArrow) menuSelection = Math.Max(0, menuSelection - 1);
+                    if (key.Key == ConsoleKey.DownArrow) menuSelection = Math.Min(2, menuSelection + 1);
+                    if (key.Key == ConsoleKey.Enter)
+                    {
+                        menuOpen = false;
+                        if (menuSelection == 0) windows.Add(CreateTerminalWindow());
+                        if (menuSelection == 1) windows.Add(CreateCalcWindow());
+                        if (menuSelection == 2) running = false;
+                    }
+                    if (key.Key == ConsoleKey.Escape) menuOpen = false;
+                    continue;
+                }
+
+                if (key.Key == ConsoleKey.Tab && windows.Count > 1)
+                {
+                    var top = windows.Last();
+                    windows.RemoveAt(windows.Count - 1);
+                    windows.Insert(0, top); 
+                    continue;
+                }
+
+                var activeWin = windows.LastOrDefault();
+                if (activeWin != null)
+                {
+                    if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                    {
+                        if (key.Key == ConsoleKey.W)
+                        {
+                            windows.Remove(activeWin);
+                            continue;
+                        }
+                        if (key.Key == ConsoleKey.UpArrow) activeWin.Y = Math.Max(0, activeWin.Y - 1);
+                        if (key.Key == ConsoleKey.DownArrow) activeWin.Y = Math.Min(Console.WindowHeight - activeWin.Height - 1, activeWin.Y + 1);
+                        if (key.Key == ConsoleKey.LeftArrow) activeWin.X = Math.Max(0, activeWin.X - 1);
+                        if (key.Key == ConsoleKey.RightArrow) activeWin.X = Math.Min(Console.WindowWidth - activeWin.Width, activeWin.X + 1);
+                        continue;
+                    }
+
+                    if (activeWin.HandleInput != null)
+                    {
+                        await activeWin.HandleInput(activeWin, key);
+                    }
+                }
+            }
+
+            Console.Clear();
+            ConfigManager.ApplyTheme();
+        }
+
+        private static void FillRect(int x, int y, int w, int h, ConsoleColor bg, ConsoleColor fg = ConsoleColor.White, char c = ' ')
+        {
+            Console.BackgroundColor = bg;
+            Console.ForegroundColor = fg;
+            string line = new string(c, w);
+            for (int i = 0; i < h; i++)
+            {
+                if (y + i >= 0 && y + i < Console.WindowHeight)
+                {
+                    int drawX = Math.Max(0, x);
+                    int drawW = Math.Min(w, Console.WindowWidth - drawX);
+                    if (drawW > 0)
+                    {
+                        Console.SetCursorPosition(drawX, y + i);
+                        Console.Write(line.Substring(0, drawW));
+                    }
+                }
+            }
+        }
+
+        private static void DrawDesktop(List<KdeWindow> windows, bool menuOpen, int menuSelection)
+        {
+            Console.CursorVisible = false;
+
+            FillRect(0, 0, Console.WindowWidth, Console.WindowHeight - 1, ConsoleColor.DarkCyan);
+
+            for (int i = 0; i < windows.Count; i++)
+            {
+                var w = windows[i];
+                bool isActive = (i == windows.Count - 1);
+
+                ConsoleColor borderBg = isActive ? ConsoleColor.DarkBlue : ConsoleColor.DarkGray;
+                ConsoleColor borderFg = ConsoleColor.White;
+
+                Console.BackgroundColor = borderBg;
+                Console.ForegroundColor = borderFg;
+                if (w.Y >= 0 && w.Y < Console.WindowHeight)
+                {
+                    Console.SetCursorPosition(Math.Max(0, w.X), w.Y);
+                    string title = $" {w.Title} ".PadRight(w.Width - 4) + (isActive ? "[X] " : "    ");
+                    if (title.Length > w.Width) title = title.Substring(0, w.Width);
+                    Console.Write(title);
+                }
+
+                FillRect(w.X, w.Y + 1, w.Width, w.Height - 1, ConsoleColor.Black, ConsoleColor.White);
+
+                w.DrawContent?.Invoke(w, w.X, w.Y);
+            }
+
+            if (menuOpen)
+            {
+                int smWidth = 22;
+                int smHeight = 5;
+                int smX = 0;
+                int smY = Console.WindowHeight - 1 - smHeight;
+
+                FillRect(smX, smY, smWidth, smHeight, ConsoleColor.DarkBlue, ConsoleColor.White);
+
+                string[] opts = { "1. Terminal", "2. Calculator", "3. Выход из KDE" };
+                for (int i = 0; i < opts.Length; i++)
+                {
+                    if (smY + 1 + i >= 0 && smY + 1 + i < Console.WindowHeight)
+                    {
+                        Console.SetCursorPosition(smX + 1, smY + 1 + i);
+                        if (i == menuSelection)
+                        {
+                            Console.BackgroundColor = ConsoleColor.White;
+                            Console.ForegroundColor = ConsoleColor.Black;
+                        }
+                        else
+                        {
+                            Console.BackgroundColor = ConsoleColor.DarkBlue;
+                            Console.ForegroundColor = ConsoleColor.White;
+                        }
+                        Console.Write($" {opts[i]} ".PadRight(smWidth - 2));
+                    }
+                }
+            }
+
+            Console.SetCursorPosition(0, Console.WindowHeight - 1);
+            Console.BackgroundColor = ConsoleColor.Gray;
+            Console.ForegroundColor = ConsoleColor.Black;
+            string tb = " [F1] Пуск | [Tab] Окна | [Ctrl+Стрелки] Двигать | [Ctrl+W] Закрыть ";
+            tb = tb.PadRight(Console.WindowWidth - 6) + DateTime.Now.ToString("HH:mm") + " ";
+            if (tb.Length > Console.WindowWidth) tb = tb.Substring(0, Console.WindowWidth);
+            Console.Write(tb);
+        }
+
+        private static KdeWindow CreateTerminalWindow()
+        {
+            var w = new KdeWindow { Title = "Terminal", X = 8, Y = 2, Width = Math.Max(20, Console.WindowWidth - 16), Height = Math.Max(10, Console.WindowHeight - 6) };
+            w.State["History"] = new List<string> { "StyleOS KDE Plasma Terminal Emulator", "Welcome! Use basic commands or launch tools." };
+            w.State["Input"] = "";
+
+            w.DrawContent = (win, cx, cy) =>
+            {
+                var hist = (List<string>)win.State["History"];
+                string inp = (string)win.State["Input"];
+
+                int contentLines = win.Height - 2;
+                int startIndex = Math.Max(0, hist.Count - contentLines);
+
+                for (int i = 0; i < Math.Min(contentLines, hist.Count); i++)
+                {
+                    if (cy + 1 + i >= 0 && cy + 1 + i < Console.WindowHeight)
+                    {
+                        Console.SetCursorPosition(cx + 1, cy + 1 + i);
+                        string line = hist[startIndex + i];
+                        if (line.Length > win.Width - 2) line = line.Substring(0, win.Width - 2);
+                        Console.Write(line);
+                    }
+                }
+
+                if (cy + win.Height - 1 >= 0 && cy + win.Height - 1 < Console.WindowHeight)
+                {
+                    Console.SetCursorPosition(cx + 1, cy + win.Height - 1);
+                    string userStr = Program.CurrentUser?.Username ?? "root";
+                    string promptLine = $"{userStr}@kde:~# {inp}";
+                    if (promptLine.Length > win.Width - 3) promptLine = promptLine.Substring(promptLine.Length - (win.Width - 3));
+                    Console.Write(promptLine);
+                    Console.Write("_");
+                }
+            };
+
+            w.HandleInput = async (win, key) =>
+            {
+                var hist = (List<string>)win.State["History"];
+                string inp = (string)win.State["Input"];
+
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    string userStr = Program.CurrentUser?.Username ?? "root";
+                    hist.Add($"{userStr}@kde:~# {inp}");
+
+                    if (inp.Trim().ToLower() == "clear" || inp.Trim().ToLower() == "cls")
+                    {
+                        hist.Clear();
+                    }
+                    else if (!string.IsNullOrWhiteSpace(inp))
+                    {
+                        string cmdName = inp.Split(' ')[0].ToLower();
+                        bool isInteractive = cmdName == "nano" || cmdName == "bugreport" || cmdName == "top";
+
+                        var originalOut = Console.Out;
+                        using (var sw = new StringWriter())
+                        {
+                            if (!isInteractive) Console.SetOut(sw);
+                            
+                            try
+                            {
+                                await CommandProcessor.Execute(inp);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine(ex.Message);
+                            }
+                            
+                            if (!isInteractive) Console.SetOut(originalOut);
+                            else { Console.Clear(); ConfigManager.ApplyTheme(); } 
+                            
+                            if (!isInteractive)
+                            {
+                                var output = sw.ToString().Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                                hist.AddRange(output);
+                            }
+                        }
+                    }
+                    win.State["Input"] = "";
+                }
+                else if (key.Key == ConsoleKey.Backspace && inp.Length > 0)
+                {
+                    win.State["Input"] = inp.Substring(0, inp.Length - 1);
+                }
+                else if (!char.IsControl(key.KeyChar))
+                {
+                    win.State["Input"] = inp + key.KeyChar;
+                }
+            };
+
+            return w;
+        }
+
+        private static KdeWindow CreateCalcWindow()
+        {
+            var w = new KdeWindow { Title = "Калькулятор", X = 15, Y = 5, Width = 35, Height = 12 };
+            w.State["History"] = new List<string> { "Введите математическое выражение:" };
+            w.State["Input"] = "";
+
+            w.DrawContent = (win, cx, cy) =>
+            {
+                var hist = (List<string>)win.State["History"];
+                string inp = (string)win.State["Input"];
+
+                int contentLines = win.Height - 3;
+                int startIndex = Math.Max(0, hist.Count - contentLines);
+
+                for (int i = 0; i < Math.Min(contentLines, hist.Count); i++)
+                {
+                    if (cy + 1 + i >= 0 && cy + 1 + i < Console.WindowHeight)
+                    {
+                        Console.SetCursorPosition(cx + 1, cy + 1 + i);
+                        string line = hist[startIndex + i];
+                        if (line.Length > win.Width - 2) line = line.Substring(0, win.Width - 2);
+                        Console.Write(line);
+                    }
+                }
+
+                if (cy + win.Height - 2 >= 0 && cy + win.Height - 2 < Console.WindowHeight)
+                {
+                    Console.SetCursorPosition(cx + 1, cy + win.Height - 2);
+                    string promptLine = "> " + inp;
+                    if (promptLine.Length > win.Width - 3) promptLine = promptLine.Substring(promptLine.Length - (win.Width - 3));
+                    Console.Write(promptLine);
+                    Console.Write("_");
+                }
+            };
+
+            w.HandleInput = (win, key) =>
+            {
+                var hist = (List<string>)win.State["History"];
+                string inp = (string)win.State["Input"];
+
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    if (string.IsNullOrWhiteSpace(inp)) return Task.CompletedTask;
+                    hist.Add("> " + inp);
+                    try
+                    {
+                        var dt = new DataTable();
+                        var result = dt.Compute(inp, "");
+                        hist.Add("= " + result.ToString());
+                    }
+                    catch
+                    {
+                        hist.Add("= Ошибка в выражении");
+                    }
+                    win.State["Input"] = "";
+                }
+                else if (key.Key == ConsoleKey.Backspace && inp.Length > 0)
+                {
+                    win.State["Input"] = inp.Substring(0, inp.Length - 1);
+                }
+                else if (!char.IsControl(key.KeyChar))
+                {
+                    win.State["Input"] = inp + key.KeyChar;
+                }
+                return Task.CompletedTask;
+            };
+
+            return w;
         }
     }
 }
