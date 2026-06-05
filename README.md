@@ -1,11 +1,12 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/cc340c4d-2057-41fe-b63c-220832767396" alt="StyleOS Logo" width="600">
+  <img src="https://github.com/user-attachments/assets/79fcd817-1363-491e-a5b3-3c352aede4f7" alt="StyleOS Logo" width="600">
+  
 </p>
 
 ---
 > [!WARNING]
-> This project is still in development, it is still an open beta, many features have not been added yet  
-> It's also a console system, but I'll add the .iso soon.
+> YOU MUST HAVE PYTHON ON YOUR COMPUTER TO RUN THIS  
+> This project will not be actively updated, it is not the main branch, this project was mainly written in C#  
 
 ---
 
