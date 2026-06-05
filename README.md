@@ -12,3 +12,7 @@
 
 > [!IMPORTANT]
 > in development :P
+
+> [!TIP]
+> [my web](https://timd.site)  
+> [bebebebebbeebbebebbebebe](https://github.com/nikwonder)
