@@ -50,4 +50,4 @@ Hope you like it! If you have ideas for new features, text is to me! admin@timd.
 
 > [!TIP]
 > [my web](https://timd.site)  
-> [#1 femboy in the world](https://github.com/nikwonder)
+> [NOT NOT nikwonder](https://github.com/nikwonder)
