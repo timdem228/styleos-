@@ -1,5 +1,5 @@
 > [!TIP]
-> hi guys, output 1.1.6 is being debugged for an indefinite period of time due to the fact that I have no ideas, throw some ideas into issues, and the code will also be placed in one file again  
+> hello! 1.1.6 development is in full swing, half of the xaml interface has already been written, it remains only to refine the core a little, the alpha version will be released soon  
 > bye!
 
 
