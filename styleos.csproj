@@ -7,6 +7,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>StyleOS</AssemblyName>
     <RootNamespace>StyleOS</RootNamespace>
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
