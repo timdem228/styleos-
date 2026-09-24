@@ -198,12 +198,13 @@ namespace StyleOS
                 {
                     char next = input[i + 1];
 
-                    // Unquoted backslash escapes any character (bash semantics).
-                    // Inside double quotes, only \" \\ \$ and \` are real escapes -
-                    // anything else (like \n, \t meant for printf/echo -e to interpret)
-                    // must keep its backslash so the command sees it as written.
-                    bool isRealEscape = quote == '\0' ||
-                        (quote == '"' && (next == '"' || next == '\\' || next == '$' || next == '`'));
+                    // StyleOS runs on Windows, where '\' is the path separator, so an
+                    // unquoted backslash must stay literal ("cd C:\Users\tim" would
+                    // otherwise get eaten character by character). Only inside double
+                    // quotes do the classic \" \\ \$ \` escapes still apply; anything
+                    // else (paths, or \n \t meant for printf/echo -e) keeps its backslash.
+                    bool isRealEscape = quote == '"' &&
+                        (next == '"' || next == '\\' || next == '$' || next == '`');
 
                     if (isRealEscape)
                     {

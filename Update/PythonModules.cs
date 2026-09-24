@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace StyleOS
@@ -15,6 +17,14 @@ namespace StyleOS
         public string Description { get; set; } = "";
         public string Entry { get; set; } = "main.py";
         public List<string> Requires { get; set; } = new List<string>();
+
+        /// <summary>What the module is asking for beyond the console-only default:
+        /// "network" (sockets/http), "process" (spawning other programs, ctypes),
+        /// "filesystem" (reading/writing outside its own data folder).</summary>
+        public List<string> Permissions { get; set; } = new List<string>();
+
+        [JsonPropertyName("timeout_seconds")]
+        public int TimeoutSeconds { get; set; } = 0; // 0 = use PythonModules.DefaultTimeoutSeconds
     }
 
     public class InstalledModule
@@ -23,6 +33,8 @@ namespace StyleOS
         public string Version { get; set; }
         public string Description { get; set; }
         public string Entry { get; set; }
+        public List<string> Permissions { get; set; } = new List<string>();
+        public int TimeoutSeconds { get; set; }
         public string InstalledPath { get; set; }
         public DateTime InstalledAt { get; set; }
     }
@@ -41,16 +53,26 @@ namespace StyleOS
     }
 
     /// <summary>
-    /// Installs and runs small Python "modules" for StyleOS. Every module can
-    /// `import styleos as s`, and every graphical toolkit that would pop up a real OS
-    /// window is blocked - not by trusting the module to opt in, but because StyleOS sets
-    /// PYTHONPATH only for the one process it launches, pointing at our own pylib folder
-    /// (which carries a sitecustomize.py that imports styleos automatically). That keeps
-    /// the block scoped to StyleOS module runs and never touches the user's own Python
-    /// install or any of their other scripts.
+    /// Installs and runs small Python "modules" for StyleOS, from a local folder only -
+    /// a shared registry (install by name, push) is planned but not part of this release,
+    /// see Registry/ for the (inert) scaffolding.
+    ///
+    /// Every module can `import styleos as s`. Two things are enforced regardless of what
+    /// the module's own code does:
+    ///   - graphical toolkits are always blocked (StyleOS modules are console-only)
+    ///   - a run is killed if it outlives its timeout (default 60s, set "timeout_seconds"
+    ///     in setup.module to change it)
+    /// Everything else - network access, spawning other programs, files outside the
+    /// module's own data folder - is opt-in via "permissions" in setup.module, and the
+    /// person doing the install has to approve them first. None of this is a real sandbox:
+    /// it stops accidental or casual misuse, not a deliberately malicious module willing to
+    /// work around a Python-level import hook. Real isolation needs OS-level sandboxing,
+    /// which is a bigger project for later.
     /// </summary>
     public static class PythonModules
     {
+        public const int DefaultTimeoutSeconds = 60;
+
         public static readonly string PyLibDir = Path.Combine(Kernel.SysDir, "pylib");
         public static readonly string ModulesDir = Path.Combine(Kernel.SysDir, "modules");
         public static readonly string RegistryFile = Path.Combine(Kernel.SysDir, "modules_installed.json");
@@ -161,10 +183,41 @@ namespace StyleOS
                 return;
             }
 
+            var permissions = (manifest.Permissions ?? new List<string>())
+                .Select(p => p.Trim().ToLowerInvariant())
+                .Where(p => p.Length > 0)
+                .Distinct()
+                .ToList();
+            var unknown = permissions.Where(p => p != "network" && p != "process" && p != "filesystem").ToList();
+            if (unknown.Count > 0)
+            {
+                Io.Error("module", $"unknown permission(s) in setup.module: {string.Join(", ", unknown)} (valid: network, process, filesystem)");
+                return;
+            }
+
+            var dependencies = manifest.Requires ?? new List<string>();
+
+            if (permissions.Count > 0 || dependencies.Count > 0)
+            {
+                Console.WriteLine($":: '{manifest.Name}' asks for:");
+                foreach (var permission in permissions)
+                    Console.WriteLine($"   permission - {DescribePermission(permission)}");
+                foreach (var package in dependencies)
+                    Console.WriteLine($"   pip package - {package}");
+
+                Console.Write("   Install and grant this? [y/N]: ");
+                string answer = Console.ReadLine()?.Trim().ToLowerInvariant();
+                if (answer != "y" && answer != "yes")
+                {
+                    Console.WriteLine("Install cancelled.");
+                    return;
+                }
+            }
+
             Console.WriteLine($":: Installing module '{manifest.Name}' v{manifest.Version}...");
 
             var python = LoadKnownPython();
-            foreach (var package in manifest.Requires ?? new List<string>())
+            foreach (var package in dependencies)
             {
                 Console.Write($"   dependency {package}: ");
 
@@ -204,6 +257,8 @@ namespace StyleOS
                 Version = manifest.Version,
                 Description = manifest.Description,
                 Entry = entry,
+                Permissions = permissions,
+                TimeoutSeconds = manifest.TimeoutSeconds,
                 InstalledPath = destination,
                 InstalledAt = DateTime.Now
             });
@@ -212,8 +267,16 @@ namespace StyleOS
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($":: Module '{manifest.Name}' installed. Run it with: module run {manifest.Name}");
             Console.ResetColor();
-            SystemLogger.Log("PYMOD", $"Installed module {manifest.Name} v{manifest.Version}");
+            SystemLogger.Log("PYMOD", $"Installed module {manifest.Name} v{manifest.Version} (permissions: {string.Join(",", permissions)})");
         }
+
+        private static string DescribePermission(string permission) => permission switch
+        {
+            "network" => "network access (sockets, http requests)",
+            "process" => "launching other programs (subprocess, ctypes)",
+            "filesystem" => "reading/writing files outside its own data folder",
+            _ => permission
+        };
 
         private static void CopyDirectory(string source, string target)
         {
@@ -231,9 +294,12 @@ namespace StyleOS
             var registry = LoadRegistry();
             if (registry.Count == 0) { Console.WriteLine("No modules installed. See 'man module'."); return; }
 
-            Console.WriteLine($"{"Name",-18}{"Version",-10}Description");
+            Console.WriteLine($"{"Name",-18}{"Version",-10}{"Permissions",-24}Description");
             foreach (var m in registry)
-                Console.WriteLine($"{m.Name,-18}{m.Version,-10}{m.Description}");
+            {
+                string perms = m.Permissions == null || m.Permissions.Count == 0 ? "-" : string.Join(",", m.Permissions);
+                Console.WriteLine($"{m.Name,-18}{m.Version,-10}{perms,-24}{m.Description}");
+            }
         }
 
         public static void Remove(string name)
@@ -262,6 +328,9 @@ namespace StyleOS
             string entryPath = Path.Combine(found.InstalledPath, found.Entry);
             if (!File.Exists(entryPath)) { Io.Error("module", $"entry file missing: {found.Entry}"); return; }
 
+            string dataDir = Path.Combine(found.InstalledPath, "data");
+            try { Directory.CreateDirectory(dataDir); } catch { }
+
             var psi = new ProcessStartInfo
             {
                 FileName = python.Exe,
@@ -282,12 +351,28 @@ namespace StyleOS
             psi.EnvironmentVariables["STYLEOS_USER"] = Kernel.CurrentUser?.Username ?? "";
             psi.EnvironmentVariables["STYLEOS_CWD"] = Kernel.CurrentDirectory;
             psi.EnvironmentVariables["STYLEOS_VERSION"] = Kernel.Version;
+            psi.EnvironmentVariables["STYLEOS_DATA_DIR"] = dataDir;
+            psi.EnvironmentVariables["STYLEOS_PERMISSIONS"] = string.Join(",", found.Permissions ?? new List<string>());
+
+            int timeoutSeconds = found.TimeoutSeconds > 0 ? found.TimeoutSeconds : DefaultTimeoutSeconds;
 
             try
             {
                 using var process = Process.Start(psi);
-                await process.WaitForExitAsync();
-                ShellEnv.ExitCode = process.ExitCode;
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+
+                try
+                {
+                    await process.WaitForExitAsync(cts.Token);
+                    ShellEnv.ExitCode = process.ExitCode;
+                }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(true); } catch { }
+                    Io.Error("module", $"'{name}' was killed after running longer than {timeoutSeconds}s " +
+                                        "(set \"timeout_seconds\" in setup.module to change this)");
+                    ShellEnv.ExitCode = 124;
+                }
             }
             catch (Exception ex) { Io.Error("module", $"failed to launch: {ex.Message}"); }
         }
@@ -369,9 +454,16 @@ Import this from a StyleOS module:
     import styleos as s
     s.println('hello from a StyleOS module')
 
-Any library that opens its own OS window (tkinter, PyQt, pygame, wx, kivy,
-turtle, curses, and friends) is blocked the moment this file is imported -
-StyleOS modules run inside the console only, they cannot pop up a window.
+Two things are enforced no matter what: graphical toolkits (tkinter, PyQt, pygame,
+turtle, curses and friends) are always blocked - StyleOS modules are console-only and
+can't pop up a window. Network access, launching other programs, and reading/writing
+files outside this module's own data folder are blocked too, UNLESS the matching
+permission ('network', 'process', 'filesystem') was granted in setup.module at install
+time. This guards StyleOS's own read_file/write_file helpers and the common ways a
+script would reach the network or spawn a process - it is not a real sandbox, since a
+deliberately malicious script can still work around a Python-level import hook (through
+ctypes tricks, manipulating sys.modules directly, and similar). Real hard isolation needs
+OS-level sandboxing, not this.
 '''
 
 import sys
@@ -379,9 +471,9 @@ import os
 import builtins
 import importlib.abc
 
-__version__ = '1.0.0'
+__version__ = '1.1.0'
 
-_BLOCKED = {
+_GUI_BLOCKED = {
     'tkinter', 'Tkinter', '_tkinter',
     'PyQt5', 'PyQt6', 'PySide2', 'PySide6',
     'wx',
@@ -396,23 +488,52 @@ _BLOCKED = {
     'win32gui', 'win32ui',
 }
 
-_MESSAGE = (
+_NETWORK_MODULES = {
+    'socket', 'ssl',
+    'urllib', 'urllib.request',
+    'http', 'http.client',
+    'ftplib', 'smtplib', 'telnetlib',
+    'requests', 'httpx', 'aiohttp',
+}
+
+_PROCESS_MODULES = {
+    'subprocess', 'multiprocessing', 'ctypes',
+}
+
+_permissions = set(
+    p.strip() for p in os.environ.get('STYLEOS_PERMISSIONS', '').split(',') if p.strip()
+)
+
+_permission_blocked = set()
+if 'network' not in _permissions:
+    _permission_blocked |= _NETWORK_MODULES
+if 'process' not in _permissions:
+    _permission_blocked |= _PROCESS_MODULES
+
+_GUI_MESSAGE = (
     ""StyleOS: '{0}' opens its own window and cannot run inside StyleOS. ""
     'StyleOS modules are console-only.'
 )
 
+_PERMISSION_MESSAGE = (
+    ""StyleOS: '{0}' is blocked for this module. ""
+    'Add the matching permission to setup.module and reinstall if it genuinely needs this.'
+)
 
-class _GuiBlocker(importlib.abc.MetaPathFinder):
+
+class _ImportBlocker(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
         root = fullname.split('.')[0]
-        if root in _BLOCKED:
-            raise ImportError(_MESSAGE.format(root))
+        if fullname in _GUI_BLOCKED or root in _GUI_BLOCKED:
+            raise ImportError(_GUI_MESSAGE.format(fullname))
+        if fullname in _permission_blocked or root in _permission_blocked:
+            raise ImportError(_PERMISSION_MESSAGE.format(fullname))
         return None
 
 
 def _install_guard():
-    if not any(isinstance(finder, _GuiBlocker) for finder in sys.meta_path):
-        sys.meta_path.insert(0, _GuiBlocker())
+    if not any(isinstance(finder, _ImportBlocker) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _ImportBlocker())
     # matplotlib is not GUI-only, so instead of blocking it, force a headless backend.
     os.environ.setdefault('MPLBACKEND', 'Agg')
 
@@ -440,13 +561,44 @@ def version():
     return os.environ.get('STYLEOS_VERSION', 'unknown')
 
 
+def data_dir():
+    '''This module's own writable folder. Always available, no permission needed.'''
+    path = os.environ.get('STYLEOS_DATA_DIR', os.getcwd())
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _resolve_scoped(path):
+    '''Without the 'filesystem' permission, read_file/write_file are limited to this
+    module's own data folder. This only guards StyleOS's own helpers below - Python's
+    built-in open() is not restricted, since enforcing that for real needs an OS-level
+    sandbox, not a Python import hook.'''
+    if 'filesystem' in _permissions:
+        return path
+
+    if os.path.isabs(path):
+        raise PermissionError(
+            ""StyleOS: without the 'filesystem' permission, only relative paths inside ""
+            'this module\'s own data folder (s.data_dir()) are allowed.'
+        )
+
+    base = os.path.realpath(data_dir())
+    target = os.path.realpath(os.path.join(base, path))
+    if target != base and not target.startswith(base + os.sep):
+        raise PermissionError(
+            ""StyleOS: this module can only read/write files inside its own data folder ""
+            '(s.data_dir()) - add the \'filesystem\' permission to setup.module for more.'
+        )
+    return target
+
+
 def read_file(path):
-    with open(path, 'r', encoding='utf-8') as handle:
+    with open(_resolve_scoped(path), 'r', encoding='utf-8') as handle:
         return handle.read()
 
 
 def write_file(path, content):
-    with open(path, 'w', encoding='utf-8') as handle:
+    with open(_resolve_scoped(path), 'w', encoding='utf-8') as handle:
         handle.write(content)
 
 
@@ -455,9 +607,9 @@ def input_line(prompt=''):
 ";
 
         private const string SiteCustomizeSource = @"'''Auto-loaded by Python whenever StyleOS launches a module (StyleOS puts this
-folder on PYTHONPATH just for that one process). This is what makes the GUI
-block apply even to a module that never imports styleos itself - do not
-remove it from a module's own code.
+folder on PYTHONPATH just for that one process). This is what makes the GUI and
+permission blocks apply even to a module that never imports styleos itself - do
+not remove it from a module's own code.
 '''
 import styleos  # noqa: F401
 ";

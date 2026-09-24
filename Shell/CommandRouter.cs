@@ -120,6 +120,8 @@ namespace StyleOS
             Add("journalctl", system, "journalctl [-n N]", "Show the system journal", ServiceCommands.Journalctl);
             Add("authors", system, "authors", "Who made this", a => MiscCommands.Authors());
             Add("version", system, "version", "Print the StyleOS version", a => Console.WriteLine($"{Kernel.DistroName} {Kernel.Version} ({Kernel.KernelString})"));
+            AddAsync("whatsnew", system, "whatsnew [version]", "Show the whatsnew.txt from a GitHub release (defaults to the installed version)",
+                a => UpdateSystem.WhatsNew(Io.Operands(a).FirstOrDefault()));
 
             // ---- processes ---------------------------------------------------
             Add("ps", proc, "ps [-e]", "List processes", SysInfoCommands.Ps);

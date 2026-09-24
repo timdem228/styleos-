@@ -18,6 +18,9 @@ namespace StyleOS
         public string Body;
         public bool IsPrerelease;
         public string DownloadUrl;
+        public string ArchiveFileName;
+        public string SumsUrl;
+        public string SignatureUrl;
         public DateTime Published;
     }
 
@@ -97,6 +100,59 @@ namespace StyleOS
             return Parse(latest.RootElement);
         }
 
+        /// <summary>
+        /// "whatsnew [version]" - looks at that release's asset list on GitHub for a
+        /// whatsnew.txt file and prints it. No version given means the version currently
+        /// running. Missing tag, missing file, or any network hiccup all end up with the
+        /// same plain "no such feature" message rather than a wall of error text.
+        /// </summary>
+        public static async Task WhatsNew(string version)
+        {
+            string tag = string.IsNullOrWhiteSpace(version) ? Kernel.Version : version.Trim().TrimStart('v', 'V');
+
+            try
+            {
+                using var client = CreateClient();
+                string json = await client.GetStringAsync(
+                    $"https://api.github.com/repos/{Kernel.Repo}/releases/tags/{Uri.EscapeDataString(tag)}");
+
+                using var document = JsonDocument.Parse(json);
+                if (!document.RootElement.TryGetProperty("assets", out var assets))
+                {
+                    Console.WriteLine("sorry, there is no such feature in this version.");
+                    return;
+                }
+
+                string downloadUrl = null;
+                foreach (var asset in assets.EnumerateArray())
+                {
+                    string name = asset.TryGetProperty("name", out var n) ? n.GetString() : null;
+                    if (string.Equals(name, "whatsnew.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        downloadUrl = asset.TryGetProperty("browser_download_url", out var u) ? u.GetString() : null;
+                        break;
+                    }
+                }
+
+                if (string.IsNullOrEmpty(downloadUrl))
+                {
+                    Console.WriteLine("sorry, there is no such feature in this version.");
+                    return;
+                }
+
+                string text = await client.GetStringAsync(downloadUrl);
+                Console.WriteLine();
+                Console.WriteLine(text.TrimEnd());
+            }
+            catch
+            {
+                // Unknown tag (404), network error, malformed response - a user asking
+                // "what's new in X" doesn't need to see any of that, just the same answer
+                // as "there's nothing here".
+                Console.WriteLine("sorry, there is no such feature in this version.");
+            }
+        }
+
         private static ReleaseInfo Parse(JsonElement element)
         {
             try
@@ -117,6 +173,16 @@ namespace StyleOS
 
                     var chosen = zip.ValueKind == JsonValueKind.Object ? zip : assets[0];
                     info.DownloadUrl = chosen.GetProperty("browser_download_url").GetString();
+                    info.ArchiveFileName = chosen.GetProperty("name").GetString();
+
+                    foreach (var asset in assets.EnumerateArray())
+                    {
+                        string assetName = asset.TryGetProperty("name", out var an) ? an.GetString() : "";
+                        if (string.Equals(assetName, "SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase))
+                            info.SumsUrl = asset.GetProperty("browser_download_url").GetString();
+                        else if (string.Equals(assetName, "SHA256SUMS.txt.sig", StringComparison.OrdinalIgnoreCase))
+                            info.SignatureUrl = asset.GetProperty("browser_download_url").GetString();
+                    }
                 }
 
                 return info;
@@ -193,6 +259,35 @@ namespace StyleOS
 
                 Console.WriteLine($":: Downloading {release.Tag}...");
                 byte[] data = await client.GetByteArrayAsync(release.DownloadUrl);
+
+                if (!string.IsNullOrEmpty(release.SumsUrl) && !string.IsNullOrEmpty(release.SignatureUrl))
+                {
+                    Console.WriteLine(":: Verifying release signature...");
+                    byte[] sums = await client.GetByteArrayAsync(release.SumsUrl);
+                    byte[] signature = await client.GetByteArrayAsync(release.SignatureUrl);
+
+                    var status = ReleaseVerifier.Verify(data, release.ArchiveFileName, sums, signature);
+                    if (status == SignatureStatus.Invalid)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Red;
+                        Console.WriteLine(":: SIGNATURE CHECK FAILED.");
+                        Console.WriteLine("   This download does not match its published signature - refusing to install it.");
+                        Console.WriteLine("   Do not trust this file. If this keeps happening, please report it.");
+                        Console.ResetColor();
+                        SystemLogger.Log("PACMAN", $"Signature verification FAILED for {release.Tag}");
+                        return;
+                    }
+
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine("   signature verified.");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine(":: This release isn't signed - proceeding without verification.");
+                    Console.ResetColor();
+                }
 
                 if (File.Exists(tempZip)) File.Delete(tempZip);
                 if (Directory.Exists(extractPath)) Directory.Delete(extractPath, true);

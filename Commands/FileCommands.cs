@@ -106,6 +106,7 @@ namespace StyleOS
 
         private static ConsoleColor ColorFor(FileSystemInfo e)
         {
+            if (e.LinkTarget != null) return ConsoleColor.Cyan;
             if (e is DirectoryInfo) return ConsoleColor.Blue;
             string ext = e.Extension.ToLower();
             if (ext == ".exe" || ext == ".bat" || ext == ".sh" || ext == ".cmd" || ext == ".ps1") return ConsoleColor.Green;
@@ -116,6 +117,11 @@ namespace StyleOS
 
         private static void PrintDir(DirectoryInfo d, bool longFormat)
         {
+            // A symlinked directory reports its OWN size as the length of the target path
+            // string, not the actual size 0 a directory has, and isn't really "drwxr-xr-x"
+            // either - show it as a link instead of pretending it's a plain directory.
+            if (d.LinkTarget != null) { PrintLink(d, longFormat); return; }
+
             Console.ForegroundColor = ConsoleColor.Blue;
             Console.WriteLine(longFormat
                 ? $"drwxr-xr-x  {"-",10}  {d.LastWriteTime:MMM dd HH:mm}  {d.Name}/"
@@ -125,11 +131,25 @@ namespace StyleOS
 
         private static void PrintFile(FileInfo f, bool longFormat, bool human)
         {
+            if (f.LinkTarget != null) { PrintLink(f, longFormat); return; }
+
             Console.ForegroundColor = ColorFor(f);
             string size = human ? PathUtil.HumanSize(f.Length) : f.Length.ToString();
             Console.WriteLine(longFormat
                 ? $"-rw-r--r--  {size,10}  {f.LastWriteTime:MMM dd HH:mm}  {f.Name}"
                 : f.Name);
+            Console.ResetColor();
+        }
+
+        /// <summary>Prints a symlink as "name -> target", the way a real ls -l does,
+        /// instead of following it and reporting the target's own type/size under the
+        /// link's name.</summary>
+        private static void PrintLink(FileSystemInfo entry, bool longFormat)
+        {
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine(longFormat
+                ? $"lrwxrwxrwx  {"-",10}  {entry.LastWriteTime:MMM dd HH:mm}  {entry.Name} -> {entry.LinkTarget}"
+                : $"{entry.Name} -> {entry.LinkTarget}");
             Console.ResetColor();
         }
 
