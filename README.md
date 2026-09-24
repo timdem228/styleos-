@@ -1,8 +1,3 @@
-> [!TIP]
-> Hey! 1.1.7 is a security-and-bugfix release - Python modules now have real permission checks and an execution timeout, updates can be signed and verified, and there's a `whatsnew` command. The module registry (install by name, push, accounts) got pushed back to 1.1.8 so it can be done properly instead of half-working.
-> bye!
-
-
 <p align="center">
   <img src="https://github.com/user-attachments/assets/cc340c4d-2057-41fe-b63c-220832767396" alt="StyleOS Logo" width="600">
 </p>
